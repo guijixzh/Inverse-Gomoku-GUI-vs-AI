@@ -52,13 +52,19 @@ the player who first makes five in a row *loses*). It ships:
 15×15 board, Black moves first. Each turn a player either **places** a stone on
 an empty cell, or **relocates**: capture an opponent stone, then place it on an
 empty cell along one of 8 directions (two steps, one turn). The player who first
-makes five in a row **loses**; White may not relocate during the first 2 turns.
-Full rules and action encoding: [`docs/rules.md`](docs/rules.md) (Chinese).
+makes five in a row **loses**. The balancing rule — White may not relocate
+during the first 2 turns — was proposed by
+[hzyhhzy](https://github.com/hzyhhzy), the author of KataGo/KataGomo.
+
+> **Naming note**: this project uses the Chinese name 「逆五子棋」 (*Inverse
+> Gomoku*) to distinguish it from *reverse gomoku*, which has no relocation
+> rule. Both share the same losing condition (five in a row loses); Inverse
+> Gomoku adds the capture-and-replace relocation mechanic. Full rules:
+> [`docs/rules.md`](docs/rules.md) (Chinese).
 
 ## Inverse Gomoku and Its Inventor
 
-Inverse Gomoku (the player who first makes five in a row loses) was invented by
-**日出333** (Bilibili):
+Inverse Gomoku was invented by **日出333** (Bilibili):
 
 - Inventor's Bilibili: [space.bilibili.com/484235404](https://space.bilibili.com/484235404)
 - Rules intro video: [BV1n84y1G7jT](https://www.bilibili.com/video/BV1n84y1G7jT)

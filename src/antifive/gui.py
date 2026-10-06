@@ -1386,7 +1386,7 @@ class App:
         if os.name == "nt":
             os.environ.setdefault("SDL_WINDOWS_DPI_AWARENESS", "permonitor")
         pygame.init()
-        pygame.display.set_caption("逆五子棋 (连五者输)")
+        pygame.display.set_caption("逆五子棋 Antifive")
         # 按屏幕大小自动缩放,预留 80px 边距(任务栏+标题栏)
         info = pygame.display.Info()
         sw, sh = info.current_w, info.current_h

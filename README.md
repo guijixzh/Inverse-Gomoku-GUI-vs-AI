@@ -45,10 +45,14 @@ weights. All code is MIT-licensed and heavily AI-generated.
 
 ## 项目简介
 
-逆五子棋(连五者输):棋盘 15×15,黑先;每回合可选择**落子**(空位放子)或
-**移子**(占领对方一子,再沿直线把它安置到空位,占两个步但只算一个回合);
-连成五子的一方判负,白棋前 2 回合禁止移子以平衡先后手。完整规则与动作编码见
-[`docs/rules.md`](docs/rules.md)。
+**逆五子棋**在 15×15 棋盘上进行,黑先。每回合二选一:**落子**(空位放子)或
+**移子**(占领对方一子,再沿直线把它安置到空位——占两个步但只算一个回合);
+连成五子的一方判负。白棋前 2 回合禁止移子的平衡规则由
+[hzyhhzy](https://github.com/hzyhhzy)(KataGo/KataGomo 的作者)提出。
+
+> **名称说明**:本项目采用「逆五子棋」这一名称,以区别于**没有移子规则**的
+> 反五子棋;两者胜负条件相同(连五者判负),但逆五子棋包含占领与安置的移子
+> 机制。完整规则与动作编码见 [`docs/rules.md`](docs/rules.md)。
 
 项目包含:
 
@@ -63,7 +67,7 @@ weights. All code is MIT-licensed and heavily AI-generated.
 
 ## 逆五子棋与发明人
 
-逆五子棋(连五者输)玩法由 **日出333** 发明:
+逆五子棋玩法由 **日出333** 发明:
 
 - 发明人 B站主页:[space.bilibili.com/484235404](https://space.bilibili.com/484235404)
 - 规则介绍视频:[BV1n84y1G7jT](https://www.bilibili.com/video/BV1n84y1G7jT)

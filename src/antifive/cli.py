@@ -124,7 +124,7 @@ def main():
     mcts_white = MCTS(net, device, sims=args.sims, c_puct=args.c_puct)
     while True:
         print("\n" + "=" * 24)
-        print("逆五子棋(连五者输)")
+        print("逆五子棋 Antifive")
         print("1. 人机对战 (玩家执黑)")
         print("2. 人机对战 (玩家执白)")
         print("3. 观察 AI 对战 (AI vs AI)")

@@ -10,4 +10,4 @@
 - gui             pygame 图形界面
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
