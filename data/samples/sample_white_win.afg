@@ -1,0 +1,6 @@
+[AntiFive 1.0]
+[Config 15x15 white_restrict=2 loss_start=8 mask_suicide=1]
+[Result 白胜]
+[Moves 37]
+moves:
+E0 E1 E1 J6 E2 E2 I6 E0 J5 E0 I4 E1 H4 J6 I5 E0 H3 E0 G2 E2 H5 E1 F2 E0 F1 E0 C2 E0 D1 I6 H6 D1 D2 G2 G7 F1 H1

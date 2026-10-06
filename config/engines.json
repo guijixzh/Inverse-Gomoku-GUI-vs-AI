@@ -1,0 +1,15 @@
+[
+  {
+    "name": "启发式",
+    "kind": "heuristic",
+    "depth": 8,
+    "budget": 2.0
+  },
+  {
+    "name": "逆五KataGo",
+    "engine_path": "katago/katago.exe",
+    "weight_path": "models/katago/antifive15-init.bin",
+    "config_path": "config/gtp_test.cfg",
+    "auto_latest": true
+  }
+]

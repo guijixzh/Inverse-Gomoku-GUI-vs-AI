@@ -1,0 +1,16 @@
+{
+  "E_KILLABLE4": 0.9,
+  "E_DEAD4": 0.2,
+  "E_OPEN3": 0.35,
+  "E_JUMP3": 0.22,
+  "E_CLOSED3": 0.1,
+  "E_DOUBLE_KILL": 1.2,
+  "E_KILL_PLUS3": 0.5,
+  "E_DANGER": 0.02,
+  "E_SELF_KILLABLE4": 0.95,
+  "E_SELF_DEAD4": 0.15,
+  "E_SELF_OPEN3": 0.2,
+  "E_SELF_JUMP3": 0.13,
+  "E_SELF_CLOSED3": 0.08,
+  "E_PENDING_KILL": 0.95
+}

@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "antifive"
+version = "0.8.0"
+description = "逆五子棋(连五者输)AI 对战 GUI:规则引擎、MCTS、启发式 AI、自研策略价值网络与 KataGo 集成"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "guijixzh (硅基飙尘葆光)", email = "guijixzh@gmail.com" },
+]
+keywords = ["gomoku", "inverse-gomoku", "alphazero", "mcts", "katago", "pygame"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment :: Board Games",
+]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+gui = ["pygame>=2.5"]
+nn = ["torch>=2.0"]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/guijixzh/Inverse-Gomoku-GUI-vs-AI"
+Repository = "https://github.com/guijixzh/Inverse-Gomoku-GUI-vs-AI"
+
+[project.scripts]
+antifive = "antifive.gui:main"
+antifive-play = "antifive.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

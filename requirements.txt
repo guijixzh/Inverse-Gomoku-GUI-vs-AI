@@ -1,0 +1,9 @@
+# 核心运行依赖(规则引擎、启发式 AI、命令行对战)
+numpy>=1.24
+
+# pygame 图形界面(antifive / python -m antifive.gui)
+pygame>=2.5
+
+# 自研策略价值网络与训练(可选;不安装则神经网络引擎自动禁用)
+# 注意:自研网络训练总体失败,仅作复现研究用途,详见 README 与 docs/training-log.md
+# torch>=2.0

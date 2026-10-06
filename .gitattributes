@@ -1,0 +1,18 @@
+* text=auto
+
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.cfg text eol=lf
+*.afg text eol=lf
+*.spec text eol=lf
+*.yml text eol=lf
+*.txt text eol=lf
+
+*.pth binary
+*.bin binary
+*.npz binary
+*.png binary
+*.jpg binary
+*.gif binary
