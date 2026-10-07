@@ -46,7 +46,7 @@ export class App {
   private deadline: number | null = null;
   private nodes = 0;
 
-  private tier = 1;
+  private tier = 2;
   private limitMode: "none" | "ai" = "none";
   private limitSeconds = 12;
 
@@ -84,7 +84,7 @@ export class App {
         core: "正在加载 Pyodide 运行时…",
         numpy: "正在加载 numpy…",
         engine: "正在加载规则引擎…",
-        fallback: "本地资源不可用，尝试 CDN…",
+        fallback: "资源源不可用，切换备用源…",
       };
       $("loading-text").textContent = texts[s.stage] ?? "正在加载…";
       $("loading-detail").textContent = s.detail ?? "";
@@ -351,7 +351,7 @@ export class App {
   private async runAi() {
     const epoch = this.epoch;
     const tier = TIERS[this.tier];
-    const budget = this.limitMode === "ai" ? Math.min(this.limitSeconds, tier.budget) : tier.budget;
+    const budget = this.limitMode === "ai" ? this.limitSeconds : tier.budget;
     const prev = this.state;
     if (!prev) return;
     this.thinking = true;
@@ -661,11 +661,11 @@ export class App {
     } else if (this.isAiTurn()) {
       const remain = this.deadline !== null
         ? (this.deadline - performance.now()) / 1000
-        : TIERS[this.tier].budget;
+        : this.limitSeconds;
       clock.textContent = fmtClock(remain);
       clock.classList.toggle("warn", remain < 5);
     } else {
-      clock.textContent = fmtClock(Math.min(this.limitSeconds, TIERS[this.tier].budget));
+      clock.textContent = fmtClock(this.limitSeconds);
       clock.classList.remove("warn");
     }
     indicator.classList.toggle("thinking", this.thinking);

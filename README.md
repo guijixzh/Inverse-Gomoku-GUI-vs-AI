@@ -80,6 +80,15 @@ weights. All code is MIT-licensed and heavily AI-generated.
   读秒、复盘手数轴与试下分支、`.afg` 棋谱导入导出、人机/人人/机机模式与全部快捷键;
 - 浏览器内无法运行 KataGo 与 torch 权重,网页版仅提供启发式 AI;需要 KataGo 请用桌面版。
 
+### 国内访问加速(镜像)
+
+Pyodide 运行时(约 13MB,占首次加载的大头)默认从 **阿里云 npmmirror CDN**
+(`cdn.npmmirror.com`)加载,失败时自动回退本地/ jsDelivr,无需任何配置;
+可用环境变量 `VITE_PYODIDE_SOURCE=mirror|local|cdn` 指定优先源(默认生产 `mirror`、
+开发 `local`)。Service Worker 会缓存镜像资源,二次访问不再下载。
+numpy 与自研引擎 wheel(约 3MB)仍走本站;如需进一步整站加速(可选),
+把 `web/dist` 上传到任意静态托管(如 OSS/COS)即可,产物完全静态。
+
 本地开发(需要 Node.js 20+ 与 Python 3.10+,自动构建纯 Python wheel 并准备 Pyodide 资源):
 
 ```bash

@@ -63,11 +63,17 @@ if (process.env.ANTIFIVE_SKIP_WHEEL !== "1") {
     const r = spawnSync(python, ["-m", "pip", "wheel", repoRoot, "--no-deps", "-w", tmp], {
       stdio: "inherit",
     });
-    if (r.status !== 0) throw new Error("wheel build failed; set ANTIFIVE_PYTHON or build manually");
-    const whl = fs.readdirSync(tmp).find((f) => f.endsWith(".whl"));
-    if (!whl) throw new Error("wheel not found after build");
-    fs.copyFileSync(path.join(tmp, whl), wheelDst);
+    const whl = r.status === 0 ? fs.readdirSync(tmp).find((f) => f.endsWith(".whl")) : null;
+    if (!whl) {
+      if (fs.existsSync(wheelDst)) {
+        console.warn("wheel build failed; using existing public/antifive.whl");
+      } else {
+        throw new Error("wheel build failed; set ANTIFIVE_PYTHON or build the wheel manually");
+      }
+    } else {
+      fs.copyFileSync(path.join(tmp, whl), wheelDst);
+      console.log(`antifive wheel ready: public/antifive.whl (${whl})`);
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
-    console.log(`antifive wheel ready: public/antifive.whl (${whl})`);
   }
 }

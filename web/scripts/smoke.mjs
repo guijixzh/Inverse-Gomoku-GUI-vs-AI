@@ -109,14 +109,38 @@ const initial = await page.evaluate(() => ({
 }));
 check(initial.player === 1 && initial.count === 0 && initial.legal === 225, "initial state");
 
+const defaults = await page.evaluate(() => ({
+  tier: window.__antifive.tier,
+  limit: window.__antifive.limitSeconds,
+  param: document.getElementById("info-param").textContent,
+}));
+check(defaults.tier === 2 && defaults.limit === 12 && defaults.param === "深度 8 层", "default depth 8 / 12s");
+
+await page.keyboard.press("e");
+await page.click('input[name="limit"][value="ai"]');
+await page.$eval("#limit-seconds", (el) => {
+  el.value = "20";
+});
+await page.click("#settings-apply");
+
 const box = await (await page.$("#board")).boundingBox();
 await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-await wait(() => window.__antifive.state.move_count >= 2, 120000);
+await wait(() => window.__antifive.thinking === true, 30000, 50);
+const remain = await page.evaluate(() => (window.__antifive.deadline - performance.now()) / 1000);
+check(remain > 16 && remain <= 20.5, `limit seconds applied (${remain.toFixed(1)}s)`);
+await wait(() => window.__antifive.state.move_count >= 2 && !window.__antifive.thinking, 120000);
 const afterAi = await page.evaluate(() => ({
   count: window.__antifive.state.move_count,
   player: window.__antifive.state.player,
 }));
 check(afterAi.count === 2 && afterAi.player === 1, "human move + AI reply");
+
+await page.evaluate(() => {
+  const app = window.__antifive;
+  app.limitMode = "none";
+  app.tier = 0;
+  app.syncPanel();
+});
 
 await page.keyboard.press("u");
 await wait(() => window.__antifive.state.move_count === 0);

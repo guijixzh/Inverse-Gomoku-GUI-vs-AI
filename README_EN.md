@@ -81,6 +81,17 @@ Play in the browser, no installation:
 - KataGo and the torch network cannot run in the browser; the web version ships
   the heuristic AI only.
 
+### China access / mirrors
+
+The Pyodide runtime (about 13 MB, most of the first load) is fetched from the
+**npmmirror CDN** (`cdn.npmmirror.com`, Alibaba Cloud) by default, with automatic
+fallback to the local copy / jsDelivr. Override the preferred source with
+`VITE_PYODIDE_SOURCE=mirror|local|cdn` (production defaults to `mirror`,
+development to `local`). The Service Worker caches mirror assets, so repeat
+visits do not download them again. numpy and the engine wheel (about 3 MB) are
+still served from the site itself; for optional full-site acceleration, upload
+`web/dist` to any static host (e.g. OSS/COS) — the output is fully static.
+
 Local development (Node.js 20+ and Python 3.10+; the wheel and Pyodide assets are
 prepared automatically):
 
