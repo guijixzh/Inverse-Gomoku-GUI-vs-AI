@@ -76,6 +76,8 @@ weights. All code is MIT-licensed and heavily AI-generated.
   前端为 TypeScript + Canvas 静态站,托管在 GitHub Pages;
 - 首次打开需下载运行环境(约 10-20MB),之后访问走 Service Worker 缓存;
   三档难度对应启发式深度 2 / 4 / 8(带时间预算,超时取上一层完整搜索结果);
+- 「设定」可切换**引擎版本**(新版强化 / 老版经典)与 **VCF 强制杀链**(仅新版生效),
+  默认新版 + VCF 开(最强);老版为优化前的冻结算法;
 - 功能对齐 pygame GUI:落子/占领/安置、危险提示、手数、移子箭头、辅助射线、音效、
   读秒、复盘手数轴与试下分支、`.afg` 棋谱导入导出、人机/人人/机机模式与全部快捷键;
 - 浏览器内无法运行 KataGo 与 torch 权重,网页版仅提供启发式 AI;需要 KataGo 请用桌面版。
@@ -193,7 +195,9 @@ Python 缺少依赖,可先运行 `python scripts/setup_env.py --install` 一键�
 也可在根目录新建 `run_gui.local.bat`(已被 gitignore),写入一行
 `set PY="你的python.exe路径"` 指定解释器(例如 conda 环境)。
 
-启动后点「设定」可随时更换引擎与参数;1–4 切换人执黑/人执白/人人/机机模式。
+启动后点「设定」可随时更换引擎与参数;启发式 AI 可切换**引擎版本**(新版强化 /
+老版经典)与 **VCF 强制杀链**开关(默认新版 + VCF 开,即最强配置)。命令行等价参数:
+`--heuristic-version new|old` 与 `--no-vcf`。1–4 切换人执黑/人执白/人人/机机模式。
 
 ### 命令行对战
 
@@ -238,7 +242,7 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 |---|---|---|---|
 | 随机先验 MCTS | numpy | 低 | 无额外文件的默认兜底 |
 | 自研网络 MCTS | torch + `.pth` | 不足(训练失败) | 研究/复现用途 |
-| 启发式 AI | numpy | 中高 | 深度 1–8,默认 4 |
+| 启发式 AI | numpy | 中高 | 深度 1–8,默认 4;新版(默认,含 VCF 可选)/ 老版经典 |
 | KataGo(逆五) | 外部 exe + `.bin` | 高 | 推荐实用引擎 |
 
 权重明细、加载方式与 KataGo 配置见 [`models/README.md`](models/README.md)
@@ -246,7 +250,10 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 
 启发式 AI 启动时会自动加载 `data/params.json` 中的调优参数(仅白名单评估/排序键;
 `ANTIFIVE_NO_PARAMS=1` 可关闭),置换表大小可用 `ANTIFIVE_TT_BITS` 调整(网页版等
-低内存环境可设 19-20)。搜索基准与新旧对拍:
+低内存环境可设 19-20)。对弈与分析默认启用独立强制杀链搜索(VCF 类,证明式必胜,
+预算 `ANTIFIVE_VCF_BUDGET` 默认 0.05s/步,`ANTIFIVE_VCF=0` 关闭,
+`ANTIFIVE_VCF_DEPTH` 默认 6);桌面与网页的「设定」面板均可切换引擎版本(新版/
+老版)与 VCF 开关,默认**新版 + VCF 开**。搜索基准与新旧对拍:
 
 ```bash
 python -m antifive.tools.heur_bench --depths 4,5,6            # 固定局面池基准
@@ -282,6 +289,8 @@ Inverse-Gomoku-GUI-vs-AI/
 │   ├── mcts.py                 # AlphaZero 风格 MCTS(torch 可选)
 │   ├── network.py              # 策略价值网络(训练失败)
 │   ├── heuristic.py            # 启发式 AI(alpha-beta + 全局评估)
+│   ├── threat_search.py        # 独立强制杀链搜索(VCF,可开关)
+│   ├── heuristic_versions.py   # 启发式版本调度(新版/老版,VCF 开关)
 │   ├── tactics.py              # 杀棋检测
 │   ├── record.py               # .afg 棋谱读写
 │   ├── gui.py                  # pygame 图形界面

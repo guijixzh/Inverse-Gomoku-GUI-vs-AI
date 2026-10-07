@@ -374,6 +374,11 @@ button.active {
   cursor: pointer;
 }
 
+.radios label.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .seconds {
   display: flex;
   align-items: center;

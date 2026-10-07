@@ -85,6 +85,8 @@ WIN_H = BOARD_PX + 150          # 底部多留空间容纳全量快捷键提示
 
 HEURISTIC_DEPTH_DEFAULT = 4     # 启发式 AI 默认搜索深度
 HEURISTIC_TIME_BUDGET = 50.0     # 启发式 AI 每步最大思考时间(秒,迭代加深超时即止)
+HEURISTIC_VERSION_DEFAULT = "new"   # 启发式引擎版本: "new"=强化版 / "old"=经典版
+HEURISTIC_VCF_DEFAULT = True        # 新版启发式是否启用强制杀链搜索(VCF)
 AI_TIME_BUDGET_DEFAULT = 12.0    # 限时模式下 AI 每步思考时间上限(秒,读秒)
 NN_SIMS_DEFAULT = 1200           # 神经网络"决策默认阈值"(默认模拟次数)
 
@@ -473,22 +475,30 @@ class _HeuristicEngine:
     """启发式 AI 引擎(heuristic.py:迭代加深极小化搜索 + 全局评估,无网络)。"""
 
     def __init__(self, depth: int = HEURISTIC_DEPTH_DEFAULT,
-                 time_budget: float | None = HEURISTIC_TIME_BUDGET):
-        from .heuristic import _TT, choose_heuristic_move
-        self._choose = choose_heuristic_move
+                 time_budget: float | None = HEURISTIC_TIME_BUDGET,
+                 version: str = HEURISTIC_VERSION_DEFAULT,
+                 use_vcf: bool = HEURISTIC_VCF_DEFAULT):
+        from . import heuristic_versions as hv
         self.rng = np.random.default_rng()
         self.depth = depth
         self.time_budget = time_budget          # None = 不限时(按深度完整搜索)
+        self.version = hv.normalize(version)
+        self.use_vcf = bool(use_vcf)
         self.progress = 0                       # 已搜索节点数(实时计算量)
-        self._tt = _TT()                        # 跨步复用置换表(键含完整状态)
+        self._tt = None                         # 跨步复用置换表(仅新版)
+        if self.version == hv.VERSION_NEW:
+            from .heuristic import _TT
+            self._tt = _TT()
 
     def choose(self, game) -> int | None:
+        from . import heuristic_versions as hv
         self.progress = 0
-        return self._choose(game.board, game.current_player, game.pending,
-                            game.turn_count, game.white_turns,
-                            game.config, self.rng, depth=self.depth,
-                            time_budget=self.time_budget,
-                            progress_cb=self._set_progress, tt=self._tt)
+        return hv.choose(self.version, game.board, game.current_player,
+                         game.pending, game.turn_count, game.white_turns,
+                         game.config, self.rng, depth=self.depth,
+                         time_budget=self.time_budget,
+                         progress_cb=self._set_progress, tt=self._tt,
+                         use_vcf=self.use_vcf)
 
     def _set_progress(self, nodes: int) -> None:
         self.progress = nodes
@@ -931,6 +941,10 @@ class SettingsScreen:
             self.kind = "rand"
         self.model_path = app.model_path
         self.depth = app.heuristic_depth
+        self.heuristic_version = getattr(app, "heuristic_version",
+                                         HEURISTIC_VERSION_DEFAULT)
+        self.heuristic_vcf = getattr(app, "heuristic_vcf",
+                                     HEURISTIC_VCF_DEFAULT)
         self.limit_mode = app.limit_mode
         self.ai_time_budget = app.ai_time_budget
         self.mcts_sims = app.mcts_sims
@@ -974,6 +988,9 @@ class SettingsScreen:
         self._model_list = self._model_input = self._model_load = None
         self._depth_rect = self._depth_minus = self._depth_plus = None
         self._kata_weight_btn = self._kata_engine_input = self._kata_config_input = None
+        self._hver_radios: list = []
+        self._hvcf_radios: list = []
+        self._hver_label_y = self._hvcf_label_y = None
         if self.kind == "net":
             self._model_list = pygame.Rect(x0, y, w, 132)
             y += 132 + 10
@@ -994,7 +1011,24 @@ class SettingsScreen:
                 self.depth_box = _InputBox(self._depth_input, str(self.depth), mode="int")
             else:
                 self.depth_box.rect = self._depth_input
-            y += 34 + 14
+            y += 34 + 12
+            # 引擎版本:新版(强化,可选 VCF) / 老版(冻结快照)
+            self._hver_label_y = y
+            y += 24
+            ver = (("新版(强化)", "new"), ("老版(经典)", "old"))
+            bwv = (w - 12) // 2
+            self._hver_radios = [
+                (pygame.Rect(x0 + i * (bwv + 12), y, bwv, 34), lab, val)
+                for i, (lab, val) in enumerate(ver)]
+            y += 34 + 12
+            # 强制杀链搜索(VCF):仅新版生效;默认开
+            self._hvcf_label_y = y
+            y += 24
+            vcf = (("VCF 开(强制杀链)", True), ("VCF 关", False))
+            self._hvcf_radios = [
+                (pygame.Rect(x0 + i * (bwv + 12), y, bwv, 34), lab, val)
+                for i, (lab, val) in enumerate(vcf)]
+            y += 34 + 16
         elif self.kind == "kata":
             # 权重模型(带「浏览」与「载入默认」按钮,后者从引擎配置解析最新模型)
             self._kata_weight_input = pygame.Rect(x0 + 118, y, w - 118 - 92 - 72, 32)
@@ -1116,6 +1150,15 @@ class SettingsScreen:
                         self.model_path = self.models[0]
                         self.path_box.set_text(self.model_path)
                 return None
+        for r, label, val in self._hver_radios:
+            if r.collidepoint(pos):
+                self.heuristic_version = val
+                return None
+        if self.heuristic_version != "old":
+            for r, label, val in self._hvcf_radios:
+                if r.collidepoint(pos):
+                    self.heuristic_vcf = bool(val)
+                    return None
         for r, label, val in self._limit_radios:
             if r.collidepoint(pos):
                 self.limit_mode = val
@@ -1271,6 +1314,15 @@ class SettingsScreen:
         elif self.kind == "heuristic":
             self._draw_numrow(screen, font_sm, "启发式搜索深度", self.depth_box,
                               self._depth_rect, self._depth_minus, self._depth_plus)
+            self._draw_section(screen, "引擎版本", self._hver_label_y)
+            for r, label, val in self._hver_radios:
+                self._draw_radio(screen, font, r, label, val == self.heuristic_version)
+            old = self.heuristic_version == "old"
+            self._draw_section(screen, "强制杀链搜索 VCF(仅新版生效)", self._hvcf_label_y)
+            for r, label, val in self._hvcf_radios:
+                self._draw_radio(screen, font, r, label,
+                                 (not old) and bool(val) == self.heuristic_vcf,
+                                 disabled=old)
         elif self.kind == "kata":
             self._draw_pathrow(screen, font_sm, "权重模型(.bin)", self.kata_weight_box,
                                self._kata_weight_input,
@@ -1310,11 +1362,14 @@ class SettingsScreen:
         t = self.app.font_sm.render(label, True, COLOR_WOOD_DARK)
         screen.blit(t, (self._x0, y))
 
-    def _draw_radio(self, screen, font, r, label, selected):
-        color = COLOR_BTN_ACT if selected else COLOR_BTN
+    def _draw_radio(self, screen, font, r, label, selected, disabled=False):
+        if disabled:
+            color = (216, 206, 190)
+        else:
+            color = COLOR_BTN_ACT if selected else COLOR_BTN
         pygame.draw.rect(screen, color, r, border_radius=8)
         pygame.draw.rect(screen, COLOR_WOOD_DARK, r, 2, border_radius=8)
-        t = font.render(label, True, COLOR_TEXT)
+        t = font.render(label, True, (150, 140, 125) if disabled else COLOR_TEXT)
         screen.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
 
     def _draw_numrow(self, screen, font, label, box, rect, minus, plus):
@@ -1454,11 +1509,16 @@ class App:
         self.engine_desc = "随机先验 MCTS"
         self.model_path = None        # 当前神经网络模型路径(None=随机先验)
         self.heuristic_depth = HEURISTIC_DEPTH_DEFAULT  # 当前启发式 AI 搜索深度
+        self.heuristic_version = getattr(args, "heuristic_version",
+                                         HEURISTIC_VERSION_DEFAULT)
+        self.heuristic_vcf = not getattr(args, "no_vcf", False)  # 新版 VCF 开关
         self.kata_cfg = _kata_defaults()  # KataGo 引擎(可执行/配置/权重)路径
         self.settings = None          # 打开的设定面板(SettingsScreen 或 None)
         self._engine_from_cli = False
         if args.engine == "heuristic":
-            self.set_engine("heuristic", depth=args.heuristic_depth)
+            self.set_engine("heuristic", depth=args.heuristic_depth,
+                            version=self.heuristic_version,
+                            use_vcf=self.heuristic_vcf)
             self._engine_from_cli = True
         elif args.engine == "katago":
             try:
@@ -1485,9 +1545,10 @@ class App:
         self.review_axis = None       # 手数轴命中区 (x0, x1, y0, y1),未绘制时为 None
 
     # ---- 引擎 ----
-    def set_engine(self, kind: str, path: str = None, depth: int = None) -> None:
-        """切换 AI 引擎:("mcts", path)/("mcts", None=随机先验)/("heuristic", depth)/
-        ("kata", None=使用 self.kata_cfg 配置)。
+    def set_engine(self, kind: str, path: str = None, depth: int = None,
+                   version: str = None, use_vcf: bool = None) -> None:
+        """切换 AI 引擎:("mcts", path)/("mcts", None=随机先验)/
+        ("heuristic", depth, version, use_vcf)/("kata", None=使用 self.kata_cfg 配置)。
         对局限时按 self.limit_mode / self.ai_time_budget / self.mcts_sims 配置。"""
         # 关闭旧 KataGo 子进程(黑白共用同一子进程,避免重复关闭)
         old = self.ai_black
@@ -1500,13 +1561,27 @@ class App:
         self.ai_deadline = None
         ai_tb = self.ai_time_budget if self.limit_mode == "ai" else None
         if kind == "heuristic":
+            from . import heuristic_versions as hv
             if depth is None:
                 depth = HEURISTIC_DEPTH_DEFAULT
+            if version is None:
+                version = self.heuristic_version
+            if use_vcf is None:
+                use_vcf = self.heuristic_vcf
             self.heuristic_depth = depth
+            self.heuristic_version = hv.normalize(version)
+            self.heuristic_vcf = bool(use_vcf)
             self.model_path = None
-            self.ai_black = _HeuristicEngine(depth, ai_tb)
-            self.ai_white = _HeuristicEngine(depth, ai_tb)
-            self.engine_desc = f"启发式 AI(深度{depth})"
+            self.ai_black = _HeuristicEngine(depth, ai_tb,
+                                             self.heuristic_version,
+                                             self.heuristic_vcf)
+            self.ai_white = _HeuristicEngine(depth, ai_tb,
+                                             self.heuristic_version,
+                                             self.heuristic_vcf)
+            vtxt = hv.label(self.heuristic_version)
+            if self.heuristic_version == hv.VERSION_NEW:
+                vtxt += "·VCF开" if self.heuristic_vcf else "·VCF关"
+            self.engine_desc = f"启发式 AI({vtxt}, 深度{depth})"
             return
         if kind == "kata":
             self.model_path = None
@@ -1568,7 +1643,9 @@ class App:
             self.mcts_sims = max(100, int(s.mcts_sims))
             self.ai_temp = max(0.0, min(2.0, float(s.ai_temp)))
             if s.kind == "heuristic":
-                self.set_engine("heuristic", depth=int(s.depth))
+                self.set_engine("heuristic", depth=int(s.depth),
+                                version=s.heuristic_version,
+                                use_vcf=s.heuristic_vcf)
             elif s.kind == "net":
                 self.set_engine("mcts", s.model_path)
             elif s.kind == "kata":
@@ -1608,7 +1685,9 @@ class App:
     def _reapply_engine(self) -> None:
         """按当前引擎种类重建引擎(用于切换限时模式等仅改配置的场景)。"""
         if isinstance(self.ai_black, _HeuristicEngine):
-            self.set_engine("heuristic", depth=self.heuristic_depth)
+            self.set_engine("heuristic", depth=self.heuristic_depth,
+                            version=self.heuristic_version,
+                            use_vcf=self.heuristic_vcf)
         elif isinstance(self.ai_black, _KataGoEngine):
             # 读秒切换对 KataGo 生效(经 -override-config maxTime),思考中不打断
             if not self.ai_thinking:
@@ -2248,7 +2327,11 @@ class App:
         limit = (f"读 {self.ai_time_budget:g} 秒" if self.limit_mode == "ai"
                  else "不限时")
         if isinstance(self.ai_black, _HeuristicEngine):
-            engine, fname, param = "启发式 AI", "", f"深度 {self.heuristic_depth} 层"
+            from . import heuristic_versions as hv
+            vtxt = hv.label(self.heuristic_version)
+            if self.heuristic_version == hv.VERSION_NEW:
+                vtxt += "VCF开" if self.heuristic_vcf else "VCF关"
+            engine, fname, param = "启发式 AI", vtxt, f"深度 {self.heuristic_depth} 层"
         elif isinstance(self.ai_black, _KataGoEngine):
             name = os.path.basename(self.kata_cfg.get("weight", "")) or "KataGo"
             param = f"模拟 {self.mcts_sims}"
@@ -2540,6 +2623,11 @@ def main():
                         "katago=KataGo(省略则启动后选择)")
     p.add_argument("--heuristic-depth", type=int, default=HEURISTIC_DEPTH_DEFAULT,
                    help=f"启发式 AI 搜索深度(默认 {HEURISTIC_DEPTH_DEFAULT},1-8)")
+    p.add_argument("--heuristic-version", default=HEURISTIC_VERSION_DEFAULT,
+                   choices=("new", "old"),
+                   help="启发式引擎版本: new=强化版(默认) / old=经典版")
+    p.add_argument("--no-vcf", action="store_true",
+                   help="新版启发式关闭强制杀链搜索(VCF),默认开启")
     p.add_argument("--limit", default="none", choices=("none", "ai"),
                    help="对局限时: none=不限时(默认), ai=仅 AI 方限时读秒")
     p.add_argument("--ai-time", type=float, default=AI_TIME_BUDGET_DEFAULT,

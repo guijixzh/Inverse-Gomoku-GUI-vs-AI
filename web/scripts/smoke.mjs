@@ -100,6 +100,7 @@ const wait = async (fn, timeout = 240000, step = 300) => {
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await wait(() => document.getElementById("loading").classList.contains("hidden"));
+await wait(() => window.__antifive?.state, 60000, 50);
 check(true, "engine ready");
 
 const initial = await page.evaluate(() => ({
@@ -114,14 +115,29 @@ const defaults = await page.evaluate(() => ({
   limit: window.__antifive.limitSeconds,
   param: document.getElementById("info-param").textContent,
 }));
-check(defaults.tier === 2 && defaults.limit === 12 && defaults.param === "深度 8 层", "default depth 8 / 12s");
+check(defaults.tier === 2 && defaults.limit === 12 &&
+  defaults.param === "新版·VCF开 · 深度 8 层",
+  "default new+VCF / depth 8 / 12s");
 
 await page.keyboard.press("e");
 await page.click('input[name="limit"][value="ai"]');
 await page.$eval("#limit-seconds", (el) => {
   el.value = "20";
 });
+// 版本/VCF 开关:老版时 VCF 自动禁用;切回新版并关 VCF 后应生效
+await page.click('input[name="hver"][value="old"]');
+check(await page.$eval('input[name="hvcf"]', (el) => el.disabled),
+  "vcf disabled for old version");
+await page.click('input[name="hver"][value="new"]');
+await page.click('input[name="hvcf"][value="off"]');
 await page.click("#settings-apply");
+const applied = await page.evaluate(() => ({
+  ver: window.__antifive.hver,
+  vcf: window.__antifive.hvcf,
+  param: document.getElementById("info-param").textContent,
+}));
+check(applied.ver === "new" && applied.vcf === false &&
+  applied.param.includes("VCF关"), "version/vcf applied");
 
 const box = await (await page.$("#board")).boundingBox();
 await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);

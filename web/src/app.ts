@@ -49,6 +49,8 @@ export class App {
   private tier = 2;
   private limitMode: "none" | "ai" = "none";
   private limitSeconds = 12;
+  private hver: "new" | "old" = "new";
+  private hvcf = true;
 
   private showDanger = false;
   private showNumbers = false;
@@ -202,6 +204,30 @@ export class App {
       label.append(input, document.createTextNode(`${tier.name}(深度 ${tier.depth})`));
       tierRadios.appendChild(label);
     });
+    const hverRadios = $("hver-radios");
+    for (const [value, text] of [["new", "新版(强化)"], ["old", "老版(经典)"]] as const) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "hver";
+      input.value = value;
+      input.checked = value === this.hver;
+      input.addEventListener("change", () => this.syncVcfEnabled());
+      label.append(input, document.createTextNode(text));
+      hverRadios.appendChild(label);
+    }
+    const hvcfRadios = $("hvcf-radios");
+    for (const [value, text] of [["on", "开(强制杀链)"], ["off", "关"]] as const) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "hvcf";
+      input.value = value;
+      input.checked = (value === "on") === this.hvcf;
+      label.append(input, document.createTextNode(text));
+      hvcfRadios.appendChild(label);
+    }
+    this.syncVcfEnabled();
     const limitRadios = $("limit-radios");
     for (const [value, text] of [["none", "不限时"], ["ai", "AI 读秒"]] as const) {
       const label = document.createElement("label");
@@ -359,7 +385,12 @@ export class App {
     this.deadline = this.limitMode === "ai" ? performance.now() + budget * 1000 : null;
     this.syncPanel();
     try {
-      const res = await this.engine.call<AiResult>("ai", { depth: tier.depth, budget });
+      const res = await this.engine.call<AiResult>("ai", {
+        depth: tier.depth,
+        budget,
+        engine: this.hver,
+        vcf: this.hvcf,
+      });
       if (epoch !== this.epoch) return;
       this.applyMove(prev, res.state, res.move);
     } catch (error) {
@@ -600,7 +631,10 @@ export class App {
     $("review-bar").classList.toggle("hidden", !this.review);
     const st = this.state;
     const tier = TIERS[this.tier];
-    $("info-param").textContent = `深度 ${tier.depth} 层`;
+    const vtxt = this.hver === "old"
+      ? "老版"
+      : this.hvcf ? "新版·VCF开" : "新版·VCF关";
+    $("info-param").textContent = `${vtxt} · 深度 ${tier.depth} 层`;
     const infoLimit = $("info-limit");
     infoLimit.textContent = this.limitMode === "ai" ? `读 ${this.limitSeconds} 秒` : "不限时";
     if (!st) return;
@@ -769,11 +803,31 @@ export class App {
     $("review-pos").textContent = `${this.pos} / ${this.variation.length}`;
   }
 
+  private selectedVersion(): "new" | "old" {
+    const el = document.querySelector<HTMLInputElement>('input[name="hver"]:checked');
+    return el?.value === "old" ? "old" : "new";
+  }
+
+  private syncVcfEnabled(): void {
+    const old = this.selectedVersion() === "old";
+    for (const input of document.querySelectorAll<HTMLInputElement>('input[name="hvcf"]')) {
+      input.disabled = old;
+      input.closest("label")?.classList.toggle("disabled", old);
+    }
+  }
+
   private openSettings() {
     const settings = $("settings");
     for (const input of document.querySelectorAll<HTMLInputElement>('input[name="tier"]')) {
       input.checked = Number(input.value) === this.tier;
     }
+    for (const input of document.querySelectorAll<HTMLInputElement>('input[name="hver"]')) {
+      input.checked = input.value === this.hver;
+    }
+    for (const input of document.querySelectorAll<HTMLInputElement>('input[name="hvcf"]')) {
+      input.checked = (input.value === "on") === this.hvcf;
+    }
+    this.syncVcfEnabled();
     for (const input of document.querySelectorAll<HTMLInputElement>('input[name="limit"]')) {
       input.checked = input.value === this.limitMode;
     }
@@ -788,12 +842,17 @@ export class App {
   private applySettings() {
     const tierInput = document.querySelector<HTMLInputElement>('input[name="tier"]:checked');
     if (tierInput) this.tier = Number(tierInput.value);
+    this.hver = this.selectedVersion();
+    const vcfInput = document.querySelector<HTMLInputElement>('input[name="hvcf"]:checked');
+    if (vcfInput) this.hvcf = vcfInput.value === "on";
+    if (this.hver === "old") this.hvcf = false;
     const limitInput = document.querySelector<HTMLInputElement>('input[name="limit"]:checked');
     if (limitInput) this.limitMode = limitInput.value === "ai" ? "ai" : "none";
     const seconds = Number(($("limit-seconds") as HTMLInputElement).value);
     if (Number.isFinite(seconds)) this.limitSeconds = Math.max(1, Math.min(600, Math.round(seconds)));
     this.closeSettings();
-    this.setStatus(`设定已应用: ${TIERS[this.tier].name} / ${this.limitMode === "ai" ? `读秒 ${this.limitSeconds}s` : "不限时"}`);
+    const vtxt = this.hver === "old" ? "老版" : (this.hvcf ? "新版·VCF开" : "新版·VCF关");
+    this.setStatus(`设定已应用: ${vtxt} / ${TIERS[this.tier].name} / ${this.limitMode === "ai" ? `读秒 ${this.limitSeconds}s` : "不限时"}`);
     this.syncPanel();
     this.maybeRunAi();
   }

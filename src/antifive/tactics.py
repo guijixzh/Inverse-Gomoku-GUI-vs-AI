@@ -53,14 +53,72 @@ def kill_placements(board, player, pending, turn_count, white_turns,
     return legal[l5[legal]]
 
 
-def kill_captures(board, player, pending, turn_count, white_turns,
-                  config, legal=None) -> List[Tuple[int, int]]:
-    """两步杀:占领对方棋子后本回合存在一步安置杀。
+def jump_through(board, r: int, c: int, color: int) -> int:
+    """若在 (r,c) 落 color 子,经过该格的最大"子数"(允许一个空档,跳形感知)。
+    覆盖:直四(=4)、填缺(=5)、断四延伸(XX_X→XX_XX, 1+1+2=4)、跳四(XX_X, 2+1+1=4)。"""
+    best = 0
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        lo = hi = 0
+        nr, nc = r - dr, c - dc
+        while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr, nc] == color:
+            lo += 1
+            nr -= dr
+            nc -= dc
+        nr, nc = r + dr, c + dc
+        while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr, nc] == color:
+            hi += 1
+            nr += dr
+            nc += dc
+        v = 1 + lo + hi
+        # 跳形:连子(或直接相邻)外隔一个空格再接连子,只允许一个空档,取最大延伸侧
+        extra = 0
+        gr, gc = r - (lo + 1) * dr, c - (lo + 1) * dc
+        if 0 <= gr < BOARD_SIZE and 0 <= gc < BOARD_SIZE and board[gr, gc] == EMPTY:
+            lo2 = 0
+            nr, nc = gr - dr, gc - dc
+            while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE \
+                    and board[nr, nc] == color:
+                lo2 += 1
+                nr -= dr
+                nc -= dc
+            extra = max(extra, lo2)
+        gr, gc = r + (hi + 1) * dr, c + (hi + 1) * dc
+        if 0 <= gr < BOARD_SIZE and 0 <= gc < BOARD_SIZE and board[gr, gc] == EMPTY:
+            hi2 = 0
+            nr, nc = gr + dr, gc + dc
+            while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE \
+                    and board[nr, nc] == color:
+                hi2 += 1
+                nr += dr
+                nc += dc
+            extra = max(extra, hi2)
+        best = max(best, v + extra)
+    return best
 
-    返回 [(占领idx, 安置idx), ...](占领+安置都是行棋方自己的着法,必成)。
+
+def _capture_paths(flat, ci: int):
+    """产出占领 ci 后沿空位射线可达的 (目标格 t, route)。
+
+    route = ci 与 t 之间严格中间格(元组):对手要封死该杀,必须有一子落在
+    route 的某个格上(route 为空表示贴身杀,无法中途封堵)。"""
+    for d in range(MOVE_DIRS):
+        path: List[int] = []
+        for k in range(MOVE_DISTS):
+            cell = int(RAYS[ci, d, k])
+            if cell < 0 or flat[cell] != EMPTY:
+                break
+            yield cell, tuple(path)
+            path.append(cell)
+
+
+def _kill_pairs_impl(board, player, pending, turn_count, white_turns, config,
+                     legal=None, first_only: bool = False) -> List[Tuple]:
+    """两步杀枚举核心:返回 [(占领 idx, 安置 idx, route), ...]。
+
+    占领+安置都是行棋方自己的着法,必成。first_only=True 时每个占领格只取
+    第一个杀点(与旧 kill_captures 语义/顺序完全一致)。
     优化:占领后合法安置 = 从占领格出发的空位射线,无需完整掩码计算;
-    判杀在"对方子已离盘"的棋盘上进行(避免占领格参与连五的假杀)。
-    legal: 可选,已算好的合法着法数组(避免重复计算掩码)。"""
+    判杀在"对方子已离盘"的棋盘上进行(避免占领格参与连五的假杀)。"""
     if pending >= 0 or turn_count < config.loss_start_turns:
         return []
     opp = _other(player)
@@ -95,22 +153,13 @@ def kill_captures(board, player, pending, turn_count, white_turns,
             if lo + hi - 1 >= 5:
                 info.append((dr, dc, lo, hi))
         axis_info[t] = info
-    out: List[Tuple[int, int]] = []
+    out: List[Tuple] = []
     for c in legal:
         ci = int(c)
         if flat[ci] != opp:
             continue
-        targets = []
-        for d in range(MOVE_DIRS):
-            for k in range(MOVE_DISTS):
-                cell = int(RAYS[ci, d, k])
-                if cell < 0 or flat[cell] != EMPTY:
-                    break
-                targets.append(cell)
-        if not targets:
-            continue
         cix, ciy = divmod(ci, BOARD_SIZE)
-        for t in targets:
+        for t, route in _capture_paths(flat, ci):
             if not l5_orig[t]:
                 continue
             # 该杀点是否在占领 ci 后仍成立:存在一条不经过 ci 的五连轴
@@ -124,9 +173,29 @@ def kill_captures(board, player, pending, turn_count, white_turns,
                 ok = True
                 break
             if ok:
-                out.append((ci, t))
-                break
+                out.append((ci, t, route))
+                if first_only:
+                    break
     return out
+
+
+def kill_captures(board, player, pending, turn_count, white_turns,
+                  config, legal=None) -> List[Tuple[int, int]]:
+    """两步杀:占领对方棋子后本回合存在一步安置杀。
+
+    返回 [(占领idx, 安置idx), ...](占领+安置都是行棋方自己的着法,必成)。
+    legal: 可选,已算好的合法着法数组(避免重复计算掩码)。"""
+    return [(c, t) for c, t, _ in _kill_pairs_impl(
+        board, player, pending, turn_count, white_turns, config,
+        legal=legal, first_only=True)]
+
+
+def kill_pairs(board, player, pending, turn_count, white_turns,
+               config, legal=None) -> List[Tuple[int, int, Tuple[int, ...]]]:
+    """全部两步杀对 (占领 idx, 安置 idx, route):route 为封堵该杀需落子的
+    中间格集合(空元组=贴身杀不可封)。供强制杀链搜索使用,不提前 break。"""
+    return _kill_pairs_impl(board, player, pending, turn_count, white_turns,
+                            config, legal=legal, first_only=False)
 
 
 @dataclass

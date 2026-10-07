@@ -75,6 +75,9 @@ Play in the browser, no installation:
 - The first visit downloads the runtime (about 10-20 MB); later visits are served
   from a Service Worker cache. Three difficulty tiers map to heuristic depths
   2 / 4 / 8 with a per-move time budget.
+- The settings dialog offers an **engine version** switch (new enhanced / old
+  classic) and a **VCF forced-kill-chain** toggle (new engine only); the default
+  is new + VCF on (strongest).
 - Feature parity with the pygame GUI: place/capture/relocate, danger hints, move
   numbers, relocation arrows, helper rays, sounds, clocks, replay timeline with
   branch trials, `.afg` import/export, and all four play modes.
@@ -226,7 +229,7 @@ If the default Python lacks dependencies, run
 |---|---|---|---|
 | Uniform-prior MCTS | numpy | Low | default fallback |
 | Self-trained net MCTS | torch + `.pth` | Insufficient (training failed) | research only |
-| Heuristic AI | numpy | Medium-high | depth 1–8, default 4 |
+| Heuristic AI | numpy | Medium-high | depth 1–8, default 4; new engine (default, VCF optional) / old classic |
 | KataGo (inverse gomoku) | external exe + `.bin` | High | recommended |
 
 See [`models/README.md`](models/README.md) and

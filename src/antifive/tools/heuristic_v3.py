@@ -1,8 +1,7 @@
-"""启发式小 AI(强化版):极小化搜索 + 全局局面评估 + 选择性候选着法
+"""启发式小 AI(强化版,冻结快照 v3)
 
-v4:接入独立强制杀链搜索(threat_search,VCF 类;对弈与分析默认启用,
-预算 0.05s/步,ANTIFIVE_VCF=0 可关闭),证明"无论对手如何防守都会在有限
-步内被完成连五"的强制胜;找不到或超时自动回退常规搜索。
+本文件是加入独立强制杀链搜索(threat_search)之前的完整快照,只用于
+新旧对拍(`tools/match_ai.py` 的 --old-module)与回退参考。
 
 v3 优化(相对 tools/heuristic_v2.py 冻结快照):
 - 调优参数运行时加载(data/params.json,ANTIFIVE_NO_PARAMS=1 可关闭;
@@ -47,17 +46,14 @@ from pathlib import Path
 
 import numpy as np
 
-from . import record as record_mod
-from .paths import data_dir
-from .reversegomoku import (
+from .. import record as record_mod
+from ..paths import data_dir
+from ..reversegomoku import (
     BLACK, BOARD_SIZE, DIRECTIONS, EMPTY, GameConfig, LINE_IDX, MOVE_DIRS,
     MOVE_DISTS, PLACE_SIZE, RAYS, ReverseGomoku, WHITE, danger_map_for,
     fwd_run_lengths,
 )
-from . import threat_search
-from .tactics import (
-    jump_through as _jump_through, kill_captures, kill_placements, kill_samples,
-)
+from ..tactics import kill_captures, kill_placements, kill_samples
 
 WIN = 1e6                       # 必杀/必败(与步数相关:WIN - ply)
 MATE_LIMIT = WIN - 450          # 将死值阈值(步数上限 450):|v| ≥ 此值即为将死值,
@@ -345,6 +341,49 @@ def _line_maps(board: np.ndarray, color: int) -> tuple:
     if color == BLACK:
         return lt_b, nb_w, nb_b
     return lt_w, nb_b, nb_w
+
+
+def _jump_through(board: np.ndarray, r: int, c: int, color: int) -> int:
+    """若在 (r,c) 落 color 子,经过该格的最大"子数"(允许一个空档,跳形感知)。
+    覆盖:直四(=4)、填缺(=5)、断四延伸(XX_X→XX_XX, 1+1+2=4)、跳四(XX_X, 2+1+1=4)。"""
+    best = 0
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        lo = hi = 0
+        nr, nc = r - dr, c - dc
+        while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr, nc] == color:
+            lo += 1
+            nr -= dr
+            nc -= dc
+        nr, nc = r + dr, c + dc
+        while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr, nc] == color:
+            hi += 1
+            nr += dr
+            nc += dc
+        v = 1 + lo + hi
+        # 跳形:连子(或直接相邻)外隔一个空格再接连子,只允许一个空档,取最大延伸侧
+        extra = 0
+        gr, gc = r - (lo + 1) * dr, c - (lo + 1) * dc
+        if 0 <= gr < BOARD_SIZE and 0 <= gc < BOARD_SIZE and board[gr, gc] == EMPTY:
+            lo2 = 0
+            nr, nc = gr - dr, gc - dc
+            while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE \
+                    and board[nr, nc] == color:
+                lo2 += 1
+                nr -= dr
+                nc -= dc
+            extra = max(extra, lo2)
+        gr, gc = r + (hi + 1) * dr, c + (hi + 1) * dc
+        if 0 <= gr < BOARD_SIZE and 0 <= gc < BOARD_SIZE and board[gr, gc] == EMPTY:
+            hi2 = 0
+            nr, nc = gr + dr, gc + dc
+            while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE \
+                    and board[nr, nc] == color:
+                hi2 += 1
+                nr += dr
+                nc += dc
+            extra = max(extra, hi2)
+        best = max(best, v + extra)
+    return best
 
 
 def _loses_to_kill(board: np.ndarray, player: int, white_turns: int,
@@ -981,13 +1020,11 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                           config, rng, depth: int | None = None,
                           time_budget: float | None = None,
                           progress_cb=None, tt: "_TT | None" = None,
-                          root_prune: bool = True,
-                          use_vcf: bool | None = None) -> int | None:
+                          root_prune: bool = True) -> int | None:
     """返回着法 idx;无子可走(所有着法均自杀)返回 None。
     progress_cb(节点数) 可选:搜索途中定期回调,供 GUI 实时显示计算量。
     tt: 可选置换表(跨步复用,键含完整状态,安全);root_prune=False 时
-    根着法全部用全窗口精确求解(仅供对拍/调试,速度慢);
-    use_vcf: 是否启用强制杀链搜索(None=用 threat_search.USE_VCF 全局默认)。
+    根着法全部用全窗口精确求解(仅供对拍/调试,速度慢)。
 
     先验:存在一步/两步杀直接走(精确必胜,免搜索);
     否则迭代加深:从深度 1 逐层加深,time_budget(秒)内完成多少算多少,
@@ -1007,18 +1044,6 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
         kc = kill_captures(board, player, pending, turn_count, white_turns, config)
         if kc:
             return int(rng.choice([c for c, _ in kc]))
-    if threat_search.USE_VCF if use_vcf is None else use_vcf:
-        vcf_slice = threat_search.VCF_TIME_CAP
-        if time_budget:
-            vcf_slice = min(vcf_slice, 0.15 * time_budget)
-        if vcf_slice > 0:
-            mv = threat_search.find_forced_kill(
-                board, player, pending, turn_count, white_turns, config,
-                max_depth=threat_search.VCF_MAX_DEPTH,
-                deadline=time.perf_counter() + vcf_slice,
-                progress_cb=progress_cb)
-            if mv is not None:
-                return int(mv)
     cands = _candidates(board, player, pending, turn_count, white_turns,
                         config, ROOT_K)
     if not cands:
@@ -1104,7 +1129,7 @@ def _terminal_winner(board: np.ndarray):
 
 def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
                    depth=None, time_budget=None, k=8, progress_cb=None,
-                   tt: "_TT | None" = None, use_vcf: bool | None = None):
+                   tt: "_TT | None" = None):
     """局面分析:返回 (pos_v, moves)。pos_v=当前行棋方局面价值;
     moves=[(着法idx, 价值), ...] 按价值降序,供外部 GUI 投影/胜率显示。
     tt: 可选置换表(跨步复用);分析保持全窗口精确值,不做根 α 剪枝。
@@ -1142,20 +1167,6 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
         if progress_cb:
             progress_cb(moves[:k])
         return (moves[0][1], moves[:k])
-    if threat_search.USE_VCF if use_vcf is None else use_vcf:
-        vcf_slice = threat_search.VCF_TIME_CAP
-        if time_budget:
-            vcf_slice = min(vcf_slice, 0.15 * time_budget)
-        if vcf_slice > 0:
-            mv = threat_search.find_forced_kill(
-                board, player, pending, turn_count, white_turns, config,
-                max_depth=threat_search.VCF_MAX_DEPTH,
-                deadline=time.perf_counter() + vcf_slice)
-            if mv is not None:
-                moves = [(int(mv), WIN - 1)]
-                if progress_cb:
-                    progress_cb(moves[:k])
-                return (moves[0][1], moves[:k])
     cands = _candidates(board, player, pending, turn_count, white_turns,
                         config, ROOT_K)
     if not cands:

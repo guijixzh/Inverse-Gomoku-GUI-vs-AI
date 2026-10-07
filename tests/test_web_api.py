@@ -100,6 +100,19 @@ def test_hint_candidates():
     assert resp["moves"] and resp["moves"][0]["idx"] in range(BOARD_SIZE * BOARD_SIZE)
 
 
+def test_ai_engine_version_and_vcf_flags():
+    for engine, vcf in (("new", True), ("new", False), ("old", True),
+                        ("old", False)):
+        _call(cmd="new")
+        resp = _call(cmd="ai", depth=1, budget=2.0, engine=engine, vcf=vcf)
+        assert resp["move"] is not None
+        assert resp["state"]["board"][resp["move"]] != 0
+    _call(cmd="new")
+    _call(cmd="move", idx=112)
+    resp = _call(cmd="hint", depth=1, budget=2.0, engine="old", vcf=False)
+    assert resp["moves"]
+
+
 def test_config_roundtrip_in_state():
     resp = _call(cmd="new", config={"white_restrict_turns": 0,
                                     "loss_start_turns": 0, "mask_suicide": False})
