@@ -22,8 +22,10 @@ python -m antifive.gui --model models/best_model.pth
 
 ## 启发式 AI
 
-内置算法,无需额外文件;GUI 中可选深度 1–8(默认 4),命令行为
-`--engine heuristic --heuristic-depth N`。参数可被 `data/params.json` 复现,
+内置算法,无需额外文件;GUI 中可选深度 1–8(默认 8 + AI 读秒 12 秒),并可切换
+引擎版本(新版强化 / 老版经典)与 VCF 强制杀链开关(默认新版 + VCF 开),命令行行为
+`--engine heuristic --heuristic-depth N --limit none|ai --ai-time S
+--heuristic-version new|old --no-vcf`。参数可被 `data/params.json` 复现,
 调优工具见 `src/antifive/tools/param_tune.py`。
 
 ## KataGo(逆五规则)

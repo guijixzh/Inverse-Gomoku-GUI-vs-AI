@@ -34,12 +34,12 @@
 用法:
     python -m antifive.gui                             # 或安装后直接执行 antifive
     python -m antifive.gui --model models/best_model.pth  # 指定自研神经网络(可选)
-    python -m antifive.gui --engine heuristic          # 启发式 AI(深度 4)
-    python -m antifive.gui --engine heuristic --heuristic-depth 6  # 更强启发式
+    python -m antifive.gui --engine heuristic          # 启发式 AI(默认深度 8 + 读秒 12s)
+    python -m antifive.gui --engine heuristic --heuristic-depth 6  # 指定深度
     python -m antifive.gui --engine katago             # KataGo(路径取自 config/engines.json)
     python -m antifive.gui --model x.pth --sims 2000   # 调整神经网络模拟次数
-    python -m antifive.gui --limit ai --ai-time 15     # 仅 AI 限时读秒,每步 15 秒
-    python -m antifive.gui --limit none                # 不限时(默认)
+    python -m antifive.gui --limit ai --ai-time 15     # 仅 AI 限时读秒,每步 15 秒(默认 ai/12)
+    python -m antifive.gui --limit none                # 不限时(深度 8 单步可能较慢)
 
 torch 为可选依赖:未安装时神经网络引擎自动禁用,其余功能不受影响。
 """
@@ -83,11 +83,12 @@ PANEL_W = 320
 WIN_W = BOARD_PX + PANEL_W
 WIN_H = BOARD_PX + 150          # 底部多留空间容纳全量快捷键提示
 
-HEURISTIC_DEPTH_DEFAULT = 4     # 启发式 AI 默认搜索深度
-HEURISTIC_TIME_BUDGET = 50.0     # 启发式 AI 每步最大思考时间(秒,迭代加深超时即止)
+HEURISTIC_DEPTH_DEFAULT = 8     # 启发式 AI 默认搜索深度(与网页版困难档一致)
+HEURISTIC_TIME_BUDGET = 50.0     # 启发式 AI 不限时模式外的兜底思考时间(秒)
 HEURISTIC_VERSION_DEFAULT = "new"   # 启发式引擎版本: "new"=强化版 / "old"=经典版
 HEURISTIC_VCF_DEFAULT = True        # 新版启发式是否启用强制杀链搜索(VCF)
-AI_TIME_BUDGET_DEFAULT = 12.0    # 限时模式下 AI 每步思考时间上限(秒,读秒)
+AI_TIME_BUDGET_DEFAULT = 12.0    # 默认读秒:AI 每步思考时间上限(秒)
+LIMIT_MODE_DEFAULT = "ai"        # 默认仅 AI 限时读秒(不限时可被搜太慢,深度 8 尤甚)
 NN_SIMS_DEFAULT = 1200           # 神经网络"决策默认阈值"(默认模拟次数)
 
 MODE_NAMES = ("人执黑", "人执白", "人人对战", "机机观战")
@@ -2628,8 +2629,8 @@ def main():
                    help="启发式引擎版本: new=强化版(默认) / old=经典版")
     p.add_argument("--no-vcf", action="store_true",
                    help="新版启发式关闭强制杀链搜索(VCF),默认开启")
-    p.add_argument("--limit", default="none", choices=("none", "ai"),
-                   help="对局限时: none=不限时(默认), ai=仅 AI 方限时读秒")
+    p.add_argument("--limit", default=LIMIT_MODE_DEFAULT, choices=("none", "ai"),
+                   help="对局限时: ai=仅 AI 方限时读秒(默认), none=不限时")
     p.add_argument("--ai-time", type=float, default=AI_TIME_BUDGET_DEFAULT,
                    help=f"限时模式下 AI 每步思考时间上限秒数(默认 {AI_TIME_BUDGET_DEFAULT})")
     p.add_argument("--sims", type=int, default=NN_SIMS_DEFAULT,

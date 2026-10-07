@@ -75,7 +75,8 @@ weights. All code is MIT-licensed and heavily AI-generated.
 - 实现方式:Pyodide(WASM)在 Web Worker 中直接运行本仓库的 numpy 规则引擎与启发式 AI,
   前端为 TypeScript + Canvas 静态站,托管在 GitHub Pages;
 - 首次打开需下载运行环境(约 10-20MB),之后访问走 Service Worker 缓存;
-  三档难度对应启发式深度 2 / 4 / 8(带时间预算,超时取上一层完整搜索结果);
+  三档难度对应启发式深度 2 / 4 / 8(带时间预算,超时取上一层完整搜索结果),
+  默认「困难」= 深度 8 + 每步 12 秒,与桌面默认一致;
 - 「设定」可切换**引擎版本**(新版强化 / 老版经典)与 **VCF 强制杀链**(仅新版生效),
   默认新版 + VCF 开(最强);老版为优化前的冻结算法;
 - 功能对齐 pygame GUI:落子/占领/安置、危险提示、手数、移子箭头、辅助射线、音效、
@@ -183,9 +184,10 @@ python scripts/setup_env.py --install  # 自动安装缺失依赖(按硬件选�
 
 ```bash
 python -m antifive                       # 等价于 antifive(GUI 入口)
-python -m antifive --engine heuristic    # 直接使用启发式 AI(深度 4)
+python -m antifive --engine heuristic    # 启发式 AI(默认深度 8 + AI 读秒 12s)
 python -m antifive --model models/best_model.pth    # 自研网络作 MCTS 先验(研究)
 python -m antifive --engine katago       # KataGo(需自行放置 katago.exe,见 docs/engines.md)
+python -m antifive --limit none          # 关闭读秒(深度 8 全搜索,单步可能很慢)
 python -m antifive --limit ai --ai-time 15   # 仅 AI 限时读秒,每步 15 秒
 ```
 
@@ -195,9 +197,11 @@ Python 缺少依赖,可先运行 `python scripts/setup_env.py --install` 一键�
 也可在根目录新建 `run_gui.local.bat`(已被 gitignore),写入一行
 `set PY="你的python.exe路径"` 指定解释器(例如 conda 环境)。
 
-启动后点「设定」可随时更换引擎与参数;启发式 AI 可切换**引擎版本**(新版强化 /
-老版经典)与 **VCF 强制杀链**开关(默认新版 + VCF 开,即最强配置)。命令行等价参数:
-`--heuristic-version new|old` 与 `--no-vcf`。1–4 切换人执黑/人执白/人人/机机模式。
+启动后点「设定」可随时更换引擎与参数。桌面默认:**深度 8 + AI 每步读秒 12 秒**
+(与网页困难档一致);启发式 AI 可切换**引擎版本**(新版强化 / 老版经典)与
+**VCF 强制杀链**开关(默认新版 + VCF 开,即最强配置)。命令行等价参数:
+`--heuristic-depth`、`--limit none|ai`、`--ai-time`、`--heuristic-version new|old`
+与 `--no-vcf`。1–4 切换人执黑/人执白/人人/机机模式。
 
 ### 命令行对战
 
@@ -242,7 +246,7 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 |---|---|---|---|
 | 随机先验 MCTS | numpy | 低 | 无额外文件的默认兜底 |
 | 自研网络 MCTS | torch + `.pth` | 不足(训练失败) | 研究/复现用途 |
-| 启发式 AI | numpy | 中高 | 深度 1–8,默认 4;新版(默认,含 VCF 可选)/ 老版经典 |
+| 启发式 AI | numpy | 中高 | 深度 1–8,默认 8 + AI 读秒 12s;新版(默认,含 VCF 可选)/ 老版经典 |
 | KataGo(逆五) | 外部 exe + `.bin` | 高 | 推荐实用引擎 |
 
 权重明细、加载方式与 KataGo 配置见 [`models/README.md`](models/README.md)

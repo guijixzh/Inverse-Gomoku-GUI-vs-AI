@@ -74,7 +74,8 @@ Play in the browser, no installation:
   GitHub Pages.
 - The first visit downloads the runtime (about 10-20 MB); later visits are served
   from a Service Worker cache. Three difficulty tiers map to heuristic depths
-  2 / 4 / 8 with a per-move time budget.
+  2 / 4 / 8 with a per-move time budget; the default "Hard" tier is depth 8 with
+  a 12s clock, matching the desktop default.
 - The settings dialog offers an **engine version** switch (new enhanced / old
   classic) and a **VCF forced-kill-chain** toggle (new engine only); the default
   is new + VCF on (strongest).
@@ -191,7 +192,8 @@ KataGo executable and its DLLs are in place.
 
 ```bash
 python -m antifive                        # GUI (same as the `antifive` script)
-python -m antifive --engine heuristic     # heuristic AI (depth 4)
+python -m antifive --engine heuristic     # heuristic AI (depth 8 + 12s AI clock)
+python -m antifive --limit none           # no clock (full depth 8, may be slow)
 python -m antifive --model models/best_model.pth   # self-trained net as MCTS prior
 python -m antifive --engine katago        # KataGo (place katago.exe yourself)
 python -m antifive.cli --model models/best_model.pth --sims 400   # console play
@@ -229,7 +231,7 @@ If the default Python lacks dependencies, run
 |---|---|---|---|
 | Uniform-prior MCTS | numpy | Low | default fallback |
 | Self-trained net MCTS | torch + `.pth` | Insufficient (training failed) | research only |
-| Heuristic AI | numpy | Medium-high | depth 1–8, default 4; new engine (default, VCF optional) / old classic |
+| Heuristic AI | numpy | Medium-high | depth 1–8, default 8 + 12s AI clock; new engine (default, VCF optional) / old classic |
 | KataGo (inverse gomoku) | external exe + `.bin` | High | recommended |
 
 See [`models/README.md`](models/README.md) and
