@@ -474,12 +474,13 @@ class _HeuristicEngine:
 
     def __init__(self, depth: int = HEURISTIC_DEPTH_DEFAULT,
                  time_budget: float | None = HEURISTIC_TIME_BUDGET):
-        from .heuristic import choose_heuristic_move
+        from .heuristic import _TT, choose_heuristic_move
         self._choose = choose_heuristic_move
         self.rng = np.random.default_rng()
         self.depth = depth
         self.time_budget = time_budget          # None = 不限时(按深度完整搜索)
         self.progress = 0                       # 已搜索节点数(实时计算量)
+        self._tt = _TT()                        # 跨步复用置换表(键含完整状态)
 
     def choose(self, game) -> int | None:
         self.progress = 0
@@ -487,7 +488,7 @@ class _HeuristicEngine:
                             game.turn_count, game.white_turns,
                             game.config, self.rng, depth=self.depth,
                             time_budget=self.time_budget,
-                            progress_cb=self._set_progress)
+                            progress_cb=self._set_progress, tt=self._tt)
 
     def _set_progress(self, nodes: int) -> None:
         self.progress = nodes

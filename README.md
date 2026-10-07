@@ -244,6 +244,15 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 权重明细、加载方式与 KataGo 配置见 [`models/README.md`](models/README.md)
 与 [`docs/engines.md`](docs/engines.md)。
 
+启发式 AI 启动时会自动加载 `data/params.json` 中的调优参数(仅白名单评估/排序键;
+`ANTIFIVE_NO_PARAMS=1` 可关闭),置换表大小可用 `ANTIFIVE_TT_BITS` 调整(网页版等
+低内存环境可设 19-20)。搜索基准与新旧对拍:
+
+```bash
+python -m antifive.tools.heur_bench --depths 4,5,6            # 固定局面池基准
+python -m antifive.tools.match_ai --games 24 --depth 8 --budget 1 --workers 8  # 新旧等时对拍
+```
+
 ## 棋谱格式
 
 `.afg` 为 UTF-8 纯文本棋谱,含规则配置、结果与着法序列(支持逐手分析数据);
@@ -280,7 +289,7 @@ Inverse-Gomoku-GUI-vs-AI/
 │   ├── web_api.py              # 网页版 JSON 接口(Pyodide 复用引擎与启发式 AI)
 │   ├── paths.py                # 资源路径定位
 │   ├── training/               # 自对弈与训练
-│   └── tools/                  # 对拍、诊断、参数调优
+│   └── tools/                  # 基准、对拍、诊断、参数调优
 ├── web/                        # 网页版(Vite + TypeScript + Canvas + Pyodide)
 ├── scripts/setup_env.py        # 环境自检与依赖自动安装(GPU/CPU 自适应)
 ├── config/                     # engines.json 与 gtp_test.cfg

@@ -1,13 +1,7 @@
-"""启发式小 AI(强化版):极小化搜索 + 全局局面评估 + 选择性候选着法
+"""启发式小 AI(强化版,冻结快照 v2)
 
-v3 优化(相对 tools/heuristic_v2.py 冻结快照):
-- 调优参数运行时加载(data/params.json,ANTIFIVE_NO_PARAMS=1 可关闭;
-  置换表大小可用 ANTIFIVE_TT_BITS 调整,网页/低内存环境可用 19-20);
-- 节点级双色线图/位置摘要缓存、kill_captures 无威胁早退、kill_placements
-  复用合法掩码;节点/秒约 +25%,深度 6 节点数约 -25%;
-- 根节点 α 传播、内部 PVS 零窗口 + 历史启发、TT/killer 强制入候选;
-- 强制局面扩展(修复 ext_budget 恒 0 未生效的问题)沿强制链加深;
-- 叶节点即时杀检测消除水平线效应(搜索耗尽也能看到下一手的杀)。
+本文件是 `antifive.heuristic` 优化前的完整快照,只用于新旧对拍
+(`tools/match_ai.py`)与回退参考;新功能一律在 `antifive.heuristic` 中开发。
 
 主要特性(相对旧版 heuristic_old.py 的改进):
 - 评估函数:evaluate() 基于"线级模式提取"(_board_features)一次扫描统计
@@ -34,23 +28,19 @@ v3 优化(相对 tools/heuristic_v2.py 冻结快照):
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import threading
 import time
 from collections import OrderedDict
-from pathlib import Path
 
 import numpy as np
 
-from . import record as record_mod
-from .paths import data_dir
-from .reversegomoku import (
+from .. import record as record_mod
+from ..reversegomoku import (
     BLACK, BOARD_SIZE, DIRECTIONS, EMPTY, GameConfig, LINE_IDX, MOVE_DIRS,
     MOVE_DISTS, PLACE_SIZE, RAYS, ReverseGomoku, WHITE, danger_map_for,
     fwd_run_lengths,
 )
-from .tactics import kill_captures, kill_placements, kill_samples
+from ..tactics import kill_captures, kill_placements, kill_samples
 
 WIN = 1e6                       # 必杀/必败(与步数相关:WIN - ply)
 MATE_LIMIT = WIN - 450          # 将死值阈值(步数上限 450):|v| ≥ 此值即为将死值,
@@ -99,11 +89,6 @@ O_MIDDLE = 0.0                 # 落子:不奖励中场落子(置 0 停用)。
                                 # 棋理:己方棋子尽量在边角(安全,不给自己送连五材料),
                                 # 推对方棋子往中间由 O_PUSH_CENTER/O_PUSH_OPP 负责。
 O_NOISE = 0.02
-O_HIST = 0.05                   # 历史启发权重(截断着法累计分,参与候选入选排序)
-O_HIST_CAP = 10000.0            # 历史分上限(防止长期累积淹没静态分)
-PVS_EPS = 1e-6                  # PVS 零窗口宽度(浮点评估值)
-USE_PVS = True                  # 内部控制:PVS 零窗口(可关闭做一致性对拍)
-USE_EXT = True                  # 内部控制:强制局面扩展(可关闭做一致性对拍)
 
 ROOT_K = 8                      # 根节点候选数
 INNER_K = 6                     # 内部节点候选数(浅层)
@@ -118,57 +103,6 @@ def _inner_k(depth: int) -> int:
     if depth <= 4:
         return 4
     return INNER_K
-
-# ---- 调优参数运行时加载(data/params.json) ----
-# 白名单:E_*/O_* 数值常量与 ROOT_K/INNER_K(与 tools/param_tune.py 的
-# _PARAM_RANGES 对应)。加载只覆盖这些键,防止外部文件篡改搜索常量。
-_PARAM_NAMES = frozenset(
-    k for k, v in list(globals().items())
-    if (k.startswith("E_") or k.startswith("O_"))
-    and isinstance(v, (int, float)) and not isinstance(v, bool)
-) | frozenset({"ROOT_K", "INNER_K"})
-_PARAM_INT_KEYS = frozenset({"ROOT_K", "INNER_K"})
-_PARAMS_LOCK = threading.Lock()
-_PARAMS_LOADED = False
-
-
-def load_params(path: str | os.PathLike | None = None,
-                force: bool = False) -> dict:
-    """从 data/params.json 读取调优参数并应用(白名单键)。
-
-    返回实际应用的 {键: 值};文件缺失/非法时返回空 dict。线程安全,
-    force=False 时进程内只加载一次(配合 ensure_params 懒加载)。"""
-    global _PARAMS_LOADED
-    with _PARAMS_LOCK:
-        if _PARAMS_LOADED and not force:
-            return {}
-        _PARAMS_LOADED = True
-        p = Path(path) if path is not None else (data_dir() / "params.json")
-        try:
-            with open(p, encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        applied = {}
-        for k, v in data.items():
-            if k not in _PARAM_NAMES or not isinstance(v, (int, float)) \
-                    or isinstance(v, bool):
-                continue
-            value = int(v) if k in _PARAM_INT_KEYS else float(v)
-            globals()[k] = value
-            applied[k] = value
-        return applied
-
-
-def ensure_params() -> None:
-    """首次调用时自动加载调优参数;环境变量 ANTIFIVE_NO_PARAMS=1 可关闭。"""
-    if _PARAMS_LOADED:
-        return
-    if os.environ.get("ANTIFIVE_NO_PARAMS", "").strip().lower() in ("1", "true", "yes"):
-        return
-    load_params()
 
 # ---- Zobrist 置换表(深度 4+ 的指数级提速来源) ----
 _ZR = np.random.default_rng(20260811)
@@ -196,14 +130,7 @@ class _TT:
     """置换表:单槽、深度优先替换、fail-soft 边界标记(1=精确, 2=下界, 3=上界)。"""
     FLAG_EXACT, FLAG_LOWER, FLAG_UPPER = 1, 2, 3
 
-    def __init__(self, size: int | None = None):
-        if size is None:
-            # ANTIFIVE_TT_BITS 可调表大小(网页/Pyodide 内存敏感时设 19-20)
-            try:
-                bits = int(os.environ.get("ANTIFIVE_TT_BITS", "21"))
-            except ValueError:
-                bits = 21
-            size = 1 << max(12, min(24, bits))
+    def __init__(self, size: int = 1 << 21):
         self.mask = size - 1
         self.keys = np.zeros(size, dtype=np.uint64)
         self.values = np.zeros(size, dtype=np.float32)
@@ -239,7 +166,7 @@ class _TT:
 class _SearchCtx:
     """一次根搜索的共享状态:置换表 / 时限 / 截断标志 / killer 表 / 节点计数。"""
     __slots__ = ("tt", "deadline", "aborted", "killers", "ext_budget",
-                 "nodes", "cb", "history")
+                 "nodes", "cb")
 
     def __init__(self, tt: _TT, deadline: float | None, ext_budget: int = 1):
         self.tt = tt
@@ -249,7 +176,6 @@ class _SearchCtx:
         self.ext_budget = ext_budget
         self.nodes = 0                   # 已搜索节点数(GUI 实时计算量显示)
         self.cb = None                   # 可选进度回调 cb(node_count)
-        self.history = np.zeros(PLACE_SIZE, dtype=np.float64)  # 历史启发
 
 # 中心度图:0..1,棋盘中心=1,边角=0(空间越大越易连五)
 _CENTER = BOARD_SIZE // 2
@@ -290,54 +216,29 @@ def _other(color: int) -> int:
     return WHITE if color == BLACK else BLACK
 
 
-_LINE_MAP_CACHE: "OrderedDict[bytes, tuple]" = OrderedDict()
-LINE_MAP_CACHE_MAX = 4096
-
-
-def _line_maps_combo(board: np.ndarray) -> tuple:
-    """双色线图一次算齐并按棋盘字节 LRU 缓存:
-    (lt_black, lt_white, nb_black, nb_white),均为 uint8(15x15)。
-    lt_color[t]:若在 t 落 color 子,经过 t 的最大连续数(空/占格均有效);
-    nb_color[t]:t 的 8 邻域内 color 子数。"""
-    key = board.tobytes()
-    v = _LINE_MAP_CACHE.get(key)
-    if v is not None:
-        _LINE_MAP_CACHE.move_to_end(key)
-        return v
-    lts = []
-    for color in (BLACK, WHITE):
-        runs = fwd_run_lengths(board == color)
-        lt = np.ones((BOARD_SIZE, BOARD_SIZE), dtype=np.uint8)
-        for d1, d2 in ((0, 1), (2, 3), (4, 5), (6, 7)):
-            dr, dc = DIRECTIONS[d1]
-            f = _shift(runs[d1], -dr, -dc)      # 越过 t 的前向连子(沿 d1 的邻居)
-            b = _shift(runs[d2], dr, dc)        # 越过 t 的后向连子(沿 d2 的邻居)
-            lt = np.maximum(lt, (1 + f + b).astype(np.uint8))
-        lts.append(lt)
-    nbs = []
-    for color in (BLACK, WHITE):
-        m = (board == color).astype(np.uint8)
-        nb = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.uint8)
-        for dr in (-1, 0, 1):
-            for dc in (-1, 0, 1):
-                if dr == 0 and dc == 0:
-                    continue
-                nb += _shift(m, dr, dc)
-        nbs.append(nb)
-    res = (lts[0], lts[1], nbs[0], nbs[1])
-    if len(_LINE_MAP_CACHE) >= LINE_MAP_CACHE_MAX:
-        _LINE_MAP_CACHE.popitem(last=False)
-    _LINE_MAP_CACHE[key] = res
-    return res
-
-
 def _line_maps(board: np.ndarray, color: int) -> tuple:
-    """兼容接口:返回 (lt_color, nb_opp, nb_same)。"""
+    """向量化候选排序图:
+    line_through[t] :若在 t 落 color 子,经过 t 的最大连续数(空/占格均有效);
+    nb_opp[t], nb_same[t]:t 的 8 邻域内对方/己方棋子数。"""
     opp = _other(color)
-    lt_b, lt_w, nb_b, nb_w = _line_maps_combo(board)
-    if color == BLACK:
-        return lt_b, nb_w, nb_b
-    return lt_w, nb_b, nb_w
+    runs = fwd_run_lengths(board == color)
+    lt = np.ones((BOARD_SIZE, BOARD_SIZE), dtype=np.int32)
+    for d1, d2 in ((0, 1), (2, 3), (4, 5), (6, 7)):
+        dr, dc = DIRECTIONS[d1]
+        f = _shift(runs[d1], -dr, -dc)      # 越过 t 的前向连子(沿 d1 的邻居)
+        b = _shift(runs[d2], dr, dc)        # 越过 t 的后向连子(沿 d2 的邻居)
+        lt = np.maximum(lt, 1 + f + b)
+    m_opp = (board == opp).astype(np.int32)
+    m_same = (board == color).astype(np.int32)
+    nb_opp = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int32)
+    nb_same = np.zeros_like(nb_opp)
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            nb_opp += _shift(m_opp, dr, dc)
+            nb_same += _shift(m_same, dr, dc)
+    return lt, nb_opp, nb_same
 
 
 def _jump_through(board: np.ndarray, r: int, c: int, color: int) -> int:
@@ -576,45 +477,26 @@ def _run_material(board: np.ndarray, color: int, white_turns: int,
     return m_black if color == BLACK else m_white
 
 
-_POS_CACHE: "OrderedDict[bytes, tuple]" = OrderedDict()
-POS_CACHE_MAX = 4096
-
-
-def _positional_summary(board: np.ndarray) -> tuple:
-    """双色位置摘要一次算齐并按棋盘字节 LRU 缓存:
-    (adj_black, adj_white, cluster_black, cluster_white,
-     center_black, center_white)。
-    adj  :同色 8 邻域相邻对数(聚集度);
-    cluster:"居中×聚集"联合度(8 邻域同色数 × 中心度之和);
-    center:棋子中心度之和。"""
-    key = board.tobytes()
-    v = _POS_CACHE.get(key)
-    if v is not None:
-        _POS_CACHE.move_to_end(key)
-        return v
-    mb = (board == BLACK).astype(np.int32)
-    mw = (board == WHITE).astype(np.int32)
-    adj_b = adj_w = 0
+def _adj_pairs(board: np.ndarray, color: int) -> int:
+    """同色棋子的 8 邻域相邻对数(聚集度)。集中 = 易连五 = 负债/材料。"""
+    m = (board == color).astype(np.int32)
+    total = 0
     for dr, dc in ((1, 0), (0, 1), (1, 1), (1, -1)):
-        adj_b += int((mb * _shift(mb, dr, dc)).sum())
-        adj_w += int((mw * _shift(mw, dr, dc)).sum())
-    nb_b = np.zeros_like(mb)
-    nb_w = np.zeros_like(mw)
+        total += int((m * _shift(m, dr, dc)).sum())
+    return total
+
+
+def _cluster_center(board: np.ndarray, color: int) -> float:
+    """"居中×聚集"联合度:每个 color 棋子 8 邻域同色邻居数 × 自身中心度之和。
+    分散在中间不计数,聚团在中间计数大——推中战术的直接度量。"""
+    m = (board == color).astype(np.int32)
+    nb = np.zeros_like(m)
     for dr in (-1, 0, 1):
         for dc in (-1, 0, 1):
             if dr == 0 and dc == 0:
                 continue
-            nb_b += _shift(mb, dr, dc)
-            nb_w += _shift(mw, dr, dc)
-    res = (adj_b, adj_w,
-           float((mb * nb_b * CENTER_MAP).sum()),
-           float((mw * nb_w * CENTER_MAP).sum()),
-           float((mb * CENTER_MAP).sum()),
-           float((mw * CENTER_MAP).sum()))
-    if len(_POS_CACHE) >= POS_CACHE_MAX:
-        _POS_CACHE.popitem(last=False)
-    _POS_CACHE[key] = res
-    return res
+            nb += _shift(m, dr, dc)
+    return float((m * nb * CENTER_MAP).sum())
 
 
 def evaluate(board: np.ndarray, player: int, pending: int, turn_count: int,
@@ -649,16 +531,14 @@ def evaluate(board: np.ndarray, player: int, pending: int, turn_count: int,
     empty = PLACE_SIZE - int(np.count_nonzero(board))
     s += E_DANGER * min(danger_cnt, 20)
     s -= E_DANGER * min(danger_mine, 20)
-    # 聚集度/中心度/"居中×聚集"联合度:双色一次算齐 + 按棋盘缓存
-    adj_b, adj_w, cl_b, cl_w, ct_b, ct_w = _positional_summary(board)
-    if player == BLACK:
-        s += E_ADJ * (adj_w - adj_b)
-        s += E_CENTER_OPP * ct_w - E_CENTER_SELF * ct_b
-        s += E_CLUSTER * (cl_w - cl_b)
-    else:
-        s += E_ADJ * (adj_b - adj_w)
-        s += E_CENTER_OPP * ct_b - E_CENTER_SELF * ct_w
-        s += E_CLUSTER * (cl_b - cl_w)
+    # 聚集度:对方棋子越集中越易连五(我方资产),己方越集中越是负债
+    s += E_ADJ * (_adj_pairs(board, opp) - _adj_pairs(board, player))
+    # 中心度:对方棋子被推中间=空间大易连五=我方资产;
+    # 己方棋子居中同样易连五=轻微负债。搜索取负传播时不会抵消。
+    s += E_CENTER_OPP * ((board == opp).astype(np.float32) * CENTER_MAP).sum()
+    s -= E_CENTER_SELF * ((board == player).astype(np.float32) * CENTER_MAP).sum()
+    # 己方"居中×聚集"联合负债:分散推中间不罚,聚团推中间重罚(反制推中战术)
+    s += E_CLUSTER * (_cluster_center(board, opp) - _cluster_center(board, player))
     their_safe = empty - danger_cnt
     if their_safe <= 2:
         s += 0.8
@@ -693,36 +573,26 @@ def _place_targets(board: np.ndarray, c: int) -> list:
 
 
 def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
-                white_turns: int, config: GameConfig, k: int,
-                history=None, out_legal=None) -> list:
-    """选择性候选着法 [(排序分, move), ...] 降序。杀/解杀/堵路线 + 前 k 构造与位置着。
-    history: 可选历史启发分数组(参与入选排序);
-    out_legal: 可选 list,回填合法掩码数组(避免调用方重复计算掩码)。"""
+                white_turns: int, config: GameConfig, k: int) -> list:
+    """选择性候选着法 [(排序分, move), ...] 降序。杀/解杀/堵路线 + 前 k 构造与位置着。"""
     opp = _other(player)
     mask = ReverseGomoku.legal_mask_for(board, player, pending, white_turns,
                                         config, turn_count)
     legal = np.nonzero(mask)[0]
-    if out_legal is not None:
-        out_legal.clear()
-        out_legal.append(mask)
     if not legal.size:
         return []
     flat = board.reshape(-1)
-    lt_b, lt_w, nb_b, nb_w = _line_maps_combo(board)
-    lt_self_f = (lt_b if player == BLACK else lt_w).reshape(-1)
-    lt_opp_f = (lt_w if player == BLACK else lt_b).reshape(-1)
-    nb_self_f = (nb_b if player == BLACK else nb_w).reshape(-1)
-    nb_opp_f = (nb_w if player == BLACK else nb_b).reshape(-1)
-    hist_f = None
-    if history is not None:
-        hist_f = np.minimum(np.asarray(history, dtype=np.float64),
-                            O_HIST_CAP) * O_HIST
+    lt_self, nb_opp, nb_self = _line_maps(board, player)
+    lt_opp = _line_maps(board, opp)[0]
+    lt_self_f = lt_self.reshape(-1)
+    lt_opp_f = lt_opp.reshape(-1)
+    nb_opp_f = nb_opp.reshape(-1)
+    nb_self_f = nb_self.reshape(-1)
     out = []
     if pending >= 0:
         ends, route = _threats(board, player, white_turns, turn_count, config)
         kills = {int(x) for x in kill_placements(
-            board, player, pending, turn_count, white_turns, config,
-            legal=legal)}
+            board, player, pending, turn_count, white_turns, config)}
         for t in kills:
             out.append((O_KILL, t))
         if kills:
@@ -748,8 +618,6 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
             s_vec += (O_BLOCK_SELF4 * (lt_self_f >= 4)
                       + O_BLOCK_SELF3 * (lt_self_f == 3))
             scored = s_vec[rest_arr] + (nb_self_f[rest_arr] + nb_opp_f[rest_arr]) * 1e-4
-            if hist_f is not None:
-                scored = scored + hist_f[rest_arr]
             m = min(k, rest_arr.size)
             idx = np.argpartition(scored, -m)[-m:]
             idx = idx[np.argsort(scored[idx])[::-1]]
@@ -793,8 +661,6 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
     base = np.where(lt_self_f >= 4, O_OWN4,
                     np.where(lt_self_f == 3, O_OWN3, 0.0))
     base += nb_opp_f * O_FIGHT - nb_self_f * O_SPREAD
-    if hist_f is not None:
-        base = base + hist_f
     # 平局键:分降序、move 降序(与旧实现完全一致,保持树形稳定)
     dens = -(np.arange(PLACE_SIZE) * 1e-9).astype(np.float64)
     empty_cells = rest_arr[empty_f[rest_arr]]
@@ -835,55 +701,12 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
     return sorted(out, reverse=True)
 
 
-def _immediate_kill(board: np.ndarray, player: int, pending: int,
-                    turn_count: int, white_turns: int,
-                    config: GameConfig) -> bool:
-    """当前行棋方是否握有一步/两步必杀(杀棋立即终局,无水平线问题)。
-    复用 _board_features 的材料统计(按棋盘缓存),无额外扫描代价。"""
-    if turn_count < config.loss_start_turns:
-        return False
-    m_black, m_white, _, _, dang_black, dang_white = _board_features(
-        board, white_turns, turn_count, config)
-    opp = _other(player)
-    if pending >= 0:
-        dang = dang_black if opp == BLACK else dang_white
-        if not dang:
-            return False
-        return kill_placements(board, player, pending, turn_count,
-                               white_turns, config).size > 0
-    m_opp = m_black if opp == BLACK else m_white
-    return m_opp["killable4"] > 0
-
-
 def _bring_front(cands: list, m) -> None:
     """把候选着法 m 提到最前(若存在),保持其余相对顺序。"""
     for j, (_, mm) in enumerate(cands):
         if mm == m and j:
             cands[0], cands[j] = cands[j], cands[0]
             return
-
-
-def _include_extras(cands: list, extras, mask) -> None:
-    """把 TT/killer 等着法补进候选(按合法掩码过滤,插在特殊着之后)。
-
-    同一着法已存在则跳过;extras 按传入优先级依次占据插入位置。"""
-    if mask is None:
-        return
-    present = {m for _, m in cands}
-    valid = []
-    for m in extras:
-        if m is None or m < 0 or m >= PLACE_SIZE or m in present:
-            continue
-        if bool(mask[int(m)]):
-            valid.append(int(m))
-            present.add(int(m))
-    if not valid:
-        return
-    pos = 0
-    while pos < len(cands) and cands[pos][0] >= O_ROUTE:
-        pos += 1
-    for m in reversed(valid):
-        cands.insert(pos, (1e-6, m))
 
 
 def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
@@ -899,11 +722,6 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
     if ctx.cb is not None and (ctx.nodes & 2047) == 0:
         ctx.cb(ctx.nodes)
     if depth <= 0:
-        # 叶节点先做战术终局检测:行棋方握有一步/两步杀则直接必胜,
-        # 消除"搜索耗尽看不到下一手杀"的水平线效应
-        if _immediate_kill(board, player, pending, turn_count, white_turns,
-                           config):
-            return WIN - ply
         return evaluate(board, player, pending, turn_count, white_turns, config)
     if key is None:
         key = _zobrist(board, player, pending, turn_count, white_turns)
@@ -920,22 +738,22 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
             if flag == _TT.FLAG_UPPER and v <= alpha:
                 return v
     opp = _other(player)
-    legal_holder: list = []
     cands = _candidates(board, player, pending, turn_count, white_turns,
-                        config, _inner_k(depth), history=ctx.history,
-                        out_legal=legal_holder)
+                        config, _inner_k(depth))
     if not cands:
         if np.count_nonzero(board) == PLACE_SIZE:
             return 0.0                    # 满盘和棋
         return -(WIN - ply)               # 无子可走(必守无解/全自杀),必败
+    if tt_move is not None:
+        _bring_front(cands, tt_move)
     k1, k2 = ctx.killers[depth & 63]
-    _include_extras(cands, (tt_move, k1, k2),
-                    legal_holder[0] if legal_holder else None)
-    forced = len(cands) <= 2 and cands[0][0] >= O_ROUTE
+    if k1 >= 0:
+        _bring_front(cands, k1)
+    if k2 >= 0:
+        _bring_front(cands, k2)
     best = -1e18
     best_move = None
     alpha0 = alpha
-    searched = False
     for idx, (_, m) in enumerate(cands):
         if ctx.deadline is not None and (idx & 3) == 0 \
                 and time.perf_counter() > ctx.deadline:
@@ -962,38 +780,22 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
             v = -(WIN - ply)
         else:
             d2 = depth - 1
-            if USE_EXT and ext_budget > 0 \
-                    and (forced
-                         or (pending >= 0
-                             and _jump_through(b2, r, c, opp) >= 4
-                             and _loses_to_kill(b2, opp, wt2, tc2, config))):
-                # 强制局面(本节点只剩单一防守/造对方可杀四):对方应手极少,
-                # 多搜一层几乎不增加分支,沿强制链看得更深
+            if pending >= 0 and ext_budget > 0 \
+                    and _jump_through(b2, r, c, opp) >= 4 \
+                    and _loses_to_kill(b2, opp, wt2, tc2, config):
+                # 安置造对方可杀四:对方只剩必守着,多搜一层几乎不增加分支
                 d2 = depth
                 ext_budget = 0
-            if not searched or not USE_PVS:
-                v = -_search(b2, p2, pend2, tc2, wt2, config, d2,
-                             -beta, -alpha, ctx, ext_budget=ext_budget,
-                             ply=ply + 1)
-            else:
-                v = -_search(b2, p2, pend2, tc2, wt2, config, d2,
-                             -alpha - PVS_EPS, -alpha, ctx,
-                             ext_budget=ext_budget, ply=ply + 1)
-                if alpha < v < beta:
-                    v = -_search(b2, p2, pend2, tc2, wt2, config, d2,
-                                 -beta, -alpha, ctx, ext_budget=ext_budget,
-                                 ply=ply + 1)
+            v = -_search(b2, p2, pend2, tc2, wt2, config, d2,
+                         -beta, -alpha, ctx, ext_budget=ext_budget, ply=ply + 1)
             if ctx.aborted:
                 return best               # 子树超时:整棵返回近似值
-        searched = True
         if v > best:
             best = v
             best_move = m
             if best > alpha:
                 alpha = best
             if alpha >= beta:
-                if abs(best) < MATE_LIMIT:
-                    ctx.history[int(m)] += depth * depth
                 ks = ctx.killers[depth & 63]
                 if ks[0] != m:
                     ks[1] = ks[0]
@@ -1016,19 +818,15 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
 def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                           config, rng, depth: int | None = None,
                           time_budget: float | None = None,
-                          progress_cb=None, tt: "_TT | None" = None,
-                          root_prune: bool = True) -> int | None:
+                          progress_cb=None) -> int | None:
     """返回着法 idx;无子可走(所有着法均自杀)返回 None。
     progress_cb(节点数) 可选:搜索途中定期回调,供 GUI 实时显示计算量。
-    tt: 可选置换表(跨步复用,键含完整状态,安全);root_prune=False 时
-    根着法全部用全窗口精确求解(仅供对拍/调试,速度慢)。
 
     先验:存在一步/两步杀直接走(精确必胜,免搜索);
     否则迭代加深:从深度 1 逐层加深,time_budget(秒)内完成多少算多少,
     超时采用上一完整深度选出的着法;上一深度最佳着法在下一深度优先搜索。
     被绝杀无防守招时,以全部合法着法为候选搜索"手数最长的必败招",
     挣扎到最后一手再被绝杀,对局自然终局(不提前认输)。"""
-    ensure_params()
     if depth is None:
         depth = DEFAULT_DEPTH
     opp = _other(player)
@@ -1053,14 +851,12 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
         if not legal_all.size:
             return None
         cands = [(0.0, int(m)) for m in legal_all]
-    ctx = _SearchCtx(tt if tt is not None else _TT(),
-                     time.perf_counter() + time_budget if time_budget else None)
+    ctx = _SearchCtx(_TT(), time.perf_counter() + time_budget if time_budget else None)
     ctx.cb = progress_cb
     best_m, best_v = None, -1e18
     prev_m = None
     for d in range(1, depth + 1):
         depth_best_m, depth_best_v = None, -1e18
-        alpha_root = -1e18
         completed = True
         cands2 = cands[:]
         if prev_m is not None:
@@ -1071,19 +867,13 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                 board, m, player, pending, turn_count, white_turns, config)
             if loser == player:
                 continue
-            # 根 α 传播:后续着法用 (-inf, -(α-噪声)) 窄窗,失败退回全窗口;
-            # 根着法即杀/送杀为精确值,不参与窗口。噪声预留避免边界遗漏。
-            if not root_prune or alpha_root <= -1e17:
-                w_lo, w_hi = -1e18, 1e18
-            else:
-                w_lo, w_hi = -1e18, -(alpha_root - O_NOISE)
             if loser == opp:
                 v = WIN - 1               # 根着法第 1 步即杀
             elif np.count_nonzero(b2) == PLACE_SIZE:
                 v = 0.0
             elif pend2 >= 0:
                 v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                            w_lo, w_hi, ctx, ext_budget=1, ply=2)
+                            -1e18, 1e18, ctx, ply=2)
             elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
                                pending % BOARD_SIZE if pending >= 0 else c,
                                player) >= 4 \
@@ -1091,12 +881,10 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                 v = -(WIN - 1)            # 第 1 步即送杀
             else:
                 v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                             w_lo, w_hi, ctx, ext_budget=1, ply=2)
+                             -1e18, 1e18, ctx, ply=2)
             v += rng.uniform(0, O_NOISE)
             if v > depth_best_v:
                 depth_best_v, depth_best_m = v, m
-            if v > alpha_root:
-                alpha_root = v
             if progress_cb is not None:
                 progress_cb(ctx.nodes)
             if ctx.aborted or (ctx.deadline is not None
@@ -1125,17 +913,14 @@ def _terminal_winner(board: np.ndarray):
 
 
 def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
-                   depth=None, time_budget=None, k=8, progress_cb=None,
-                   tt: "_TT | None" = None):
+                   depth=None, time_budget=None, k=8, progress_cb=None):
     """局面分析:返回 (pos_v, moves)。pos_v=当前行棋方局面价值;
     moves=[(着法idx, 价值), ...] 按价值降序,供外部 GUI 投影/胜率显示。
-    tt: 可选置换表(跨步复用);分析保持全窗口精确值,不做根 α 剪枝。
 
     与 choose_heuristic_move 同源的迭代加深:先验一步/两步杀直接给出(价值=WIN),
     否则对候选着法做 fail-soft alpha-beta;每完成一层深度即回调 progress_cb(moves)
     (GUI 流式刷新选点)。价值尺度与对弈一致:位置价值约 ±几,必杀/必败为 ±WIN;
     终局局面按实际胜负返回(胜者 +WIN / 败者 -WIN)。"""
-    ensure_params()
     winner = _terminal_winner(board)
     if winner is not None:
         # 终局:不再搜索,按实际胜负给出价值;仍回发一个有效着法,
@@ -1172,8 +957,7 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
         if not legal_all.size:
             return (0.0, [])
         cands = [(0.0, int(m)) for m in legal_all]
-    ctx = _SearchCtx(tt if tt is not None else _TT(),
-                     time.perf_counter() + time_budget if time_budget else None)
+    ctx = _SearchCtx(_TT(), time.perf_counter() + time_budget if time_budget else None)
     prev_m = None
     for d in range(1, depth + 1):
         depth_moves = []
@@ -1193,7 +977,7 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
                 v = 0.0
             elif pend2 >= 0:
                 v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                            -1e18, 1e18, ctx, ext_budget=1, ply=2)
+                            -1e18, 1e18, ctx, ply=2)
             elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
                                pending % BOARD_SIZE if pending >= 0 else c,
                                player) >= 4 \
@@ -1201,7 +985,7 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
                 v = -(WIN - 1)            # 第 1 步即送杀
             else:
                 v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                             -1e18, 1e18, ctx, ext_budget=1, ply=2)
+                             -1e18, 1e18, ctx, ply=2)
             depth_moves.append((int(m), v))
             if ctx.aborted or (ctx.deadline is not None
                                and time.perf_counter() > ctx.deadline):

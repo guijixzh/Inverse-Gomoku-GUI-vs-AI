@@ -34,7 +34,7 @@ from typing import Optional
 import numpy as np
 
 from . import record as record_mod
-from .heuristic import DEFAULT_DEPTH, analysis_moves, choose_heuristic_move
+from .heuristic import DEFAULT_DEPTH, _TT, analysis_moves, choose_heuristic_move
 from .reversegomoku import (
     BLACK, BOARD_SIZE, WHITE, GameConfig, ReverseGomoku, danger_map_for,
 )
@@ -63,6 +63,7 @@ class _Session:
         self.rng = np.random.default_rng()
         self.last_nodes = 0
         self.last_elapsed = 0.0
+        self.tt = _TT()                 # 跨步复用置换表(网页可用 ANTIFIVE_TT_BITS 调小)
 
     def progress(self, nodes: int) -> None:
         self.last_nodes = int(nodes)
@@ -212,7 +213,7 @@ def _cmd_ai(sess: _Session, req: dict) -> dict:
     move = choose_heuristic_move(g.board, g.current_player, g.pending,
                                  g.turn_count, g.white_turns, g.config, sess.rng,
                                  depth=depth, time_budget=budget,
-                                 progress_cb=sess.progress)
+                                 progress_cb=sess.progress, tt=sess.tt)
     sess.last_elapsed = time.perf_counter() - t0
     if move is None:
         _finish_stuck(sess)
@@ -249,7 +250,8 @@ def _cmd_hint(sess: _Session, req: dict) -> dict:
     budget: Optional[float] = float(budget_raw) if budget_raw else None
     pos_v, moves = analysis_moves(
         g.board, g.current_player, g.pending, g.turn_count, g.white_turns,
-        g.config, sess.rng, depth=depth, time_budget=budget, k=5)
+        g.config, sess.rng, depth=depth, time_budget=budget, k=5,
+        tt=sess.tt)
     return {"pos_v": float(pos_v),
             "moves": [{"idx": int(m), "v": float(v)} for m, v in moves]}
 

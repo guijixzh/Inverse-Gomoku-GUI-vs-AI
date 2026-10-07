@@ -38,15 +38,17 @@ def _onehot(kills, legal: np.ndarray) -> np.ndarray:
 
 
 def kill_placements(board, player, pending, turn_count, white_turns,
-                    config) -> np.ndarray:
+                    config, legal=None) -> np.ndarray:
     """安置杀:手中对方棋子可一步完成对方连五的放置格(升序数组,可能为空)。
 
-    前提:己方正持对方棋子(pending >= 0)且判负窗口已开启。"""
+    前提:己方正持对方棋子(pending >= 0)且判负窗口已开启。
+    legal: 可选,已算好的合法着法数组(避免重复计算掩码)。"""
     if pending < 0 or turn_count < config.loss_start_turns:
         return np.zeros(0, dtype=np.int64)
     opp = _other(player)
-    legal = np.nonzero(ReverseGomoku.legal_mask_for(
-        board, player, pending, white_turns, config, turn_count))[0]
+    if legal is None:
+        legal = np.nonzero(ReverseGomoku.legal_mask_for(
+            board, player, pending, white_turns, config, turn_count))[0]
     l5 = _line5_map_for(board, opp).reshape(-1)
     return legal[l5[legal]]
 
@@ -70,6 +72,8 @@ def kill_captures(board, player, pending, turn_count, white_turns,
     # 只有"五连依赖 ci"的杀点失效,按轴判断即可。
     l5_orig = _line5_map_for(board, opp).reshape(-1)
     dang = np.nonzero(l5_orig)[0]
+    if not dang.size:
+        return []                 # 对方无连五点:不存在任何安置杀,直接早退
     axis_info = {}                # t → [(dr, dc, lo, hi)]:在 t 落子即连五的轴及两侧延伸
     for t in dang:
         tr, tc = divmod(int(t), BOARD_SIZE)

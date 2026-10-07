@@ -74,10 +74,12 @@ _PARAM_RANGES = {
     "O_BREAK3":        (-200.0, -20.0),
     "O_OWN4":          (-800.0, -100.0),
     "O_OWN3":          (-150.0, -10.0),
-    # ---- 搜索规模(不参与变异,仅记录) ----
+    # ---- 搜索规模(整数,单独成组调优) ----
     "ROOT_K":          (2, 12),
     "INNER_K":         (2, 10),
 }
+
+_INT_KEYS = {"ROOT_K", "INNER_K"}
 
 GROUPS = {
     "tactical": ["E_KILLABLE4", "E_DEAD4", "E_OPEN3", "E_JUMP3", "E_CLOSED3",
@@ -89,7 +91,8 @@ GROUPS = {
                    "O_SPREAD", "O_MIDDLE"],
     "ordering": ["O_BUILD4", "O_BUILD3", "O_BREAK4", "O_BREAK3",
                  "O_OWN4", "O_OWN3"],
-    "all": None,                      # 运行时展开
+    "width": ["ROOT_K", "INNER_K"],
+    "all": None,                      # 运行时展开(含 width)
 }
 
 VERIFY_SEED = 424242            # 跨代可比的最优参数评估种子
@@ -100,7 +103,7 @@ TRAIN_RATIO = 0.8               # 局面池训练/验证划分
 
 def group_keys(group: str) -> list:
     if group == "all":
-        return [k for k in _PARAM_RANGES if k not in ("ROOT_K", "INNER_K")]
+        return [k for k in _PARAM_RANGES]
     return GROUPS[group]
 
 
@@ -109,8 +112,9 @@ def ranges_for(keys: list) -> dict:
 
 
 def defaults_for(keys: list) -> dict:
-    """从 heuristic 模块读取当前值(与手改同步)。"""
-    return {k: float(getattr(h, k)) for k in keys}
+    """从 heuristic 模块读取当前值(与手改/params.json 同步)。"""
+    return {k: (int(getattr(h, k)) if k in _INT_KEYS
+                else float(getattr(h, k))) for k in keys}
 
 
 # 强推中参数:模拟"把对方棋子往中间聚团、自己散边角"的用户战术
@@ -124,33 +128,27 @@ PUSHER_PARAMS = {
 
 def set_params(d: dict) -> None:
     for k, v in d.items():
-        setattr(h, k, v)
+        setattr(h, k, int(round(v)) if k in _INT_KEYS else v)
 
 
 # --------------------------------------------------------------------------
 # 局面池构建(一次性,缓存 npz)
 # --------------------------------------------------------------------------
-def _sample_states(g: ReverseGomoku, out: list, rng, lo: int, hi: int,
-                   step: int, want_pending: float = 0.15) -> None:
-    """从对局 g 采样中盘状态(判负窗口开启后,含部分持子局面)。"""
-    pending_seen = 0
-    while not g.game_over:
-        mc = g.move_count
-        if lo <= mc <= hi and g.turn_count >= g.config.loss_start_turns:
-            if (mc - lo) % step == 0:
-                out.append((g.board.copy(), g.current_player, g.pending,
-                            g.turn_count, g.white_turns))
-        if g.pending >= 0 and lo <= mc <= hi:
-            pending_seen += 1
-            if pending_seen % 3 == 0:
-                out.append((g.board.copy(), g.current_player, g.pending,
-                            g.turn_count, g.white_turns))
-        mask = g.legal_mask()
-        L = np.nonzero(mask)[0]
-        if len(L) == 0:
+def _sample_moves(moves, cfg: GameConfig, out: list, lo: int = 24,
+                  hi: int = 200, step: int = 4) -> None:
+    """沿一条着法序列回放并采样中盘状态(不改变对局走势)。"""
+    g = ReverseGomoku(cfg)
+    for m in moves:
+        if g.game_over:
             break
-        g.make_move(int(rng.choice(L)))
-    return out
+        mc = g.move_count
+        if lo <= mc <= hi and g.turn_count >= cfg.loss_start_turns \
+                and (mc - lo) % step == 0:
+            out.append((g.board.copy(), g.current_player, g.pending,
+                        g.turn_count, g.white_turns))
+        if not g.legal_mask().any():
+            break
+        g.make_move(int(m))
 
 
 def _collect_raw(cfg: GameConfig, rng) -> list:
@@ -162,18 +160,11 @@ def _collect_raw(cfg: GameConfig, rng) -> list:
             rec = record_mod.load_game(path)
         except Exception:
             continue
-        g = ReverseGomoku(rec.config)
-        _sample_states(g, out, rng, 24, 200, 4)
+        _sample_moves(rec.moves, rec.config, out)
     for gi in range(40):                     # 快棋自对弈补充多样性
-        g = ReverseGomoku(cfg)
         moves, _ = h.play_game(cfg, np.random.default_rng(90000 + gi),
                                depth=2, max_steps=250)
-        g = ReverseGomoku(cfg)
-        for m in moves:
-            if g.move_count >= 200:
-                break
-            g.make_move(int(m))
-        _sample_states(g, out, rng, 24, 200, 4)
+        _sample_moves(moves, cfg, out)
     return out
 
 
@@ -201,14 +192,24 @@ def _build_pool(pool_size: int, cand_depth: int, ref_depth: int,
                                  -1e18, 1e18, ctx)
         ref_v[i] = h._search(b, pl, pe, tc, wt, cfg, ref_depth,
                              -1e18, 1e18, ctx)
-    # 过滤:深层有明确倾向 且 浅层迷惑(信号局面);浅层上限逐步放宽
+    # 过滤:深层有明确倾向 且 浅层迷惑(信号局面);浅层上限逐步放宽。
+    # 若信号局面不足(新引擎浅层已能看清),退回"深层有倾向"的普通局面补足。
+    solid = np.nonzero(np.abs(ref_v) >= REF_MIN)[0]
     shallow_max = 1.5
-    idx = np.nonzero((np.abs(ref_v) >= REF_MIN)
-                     & (np.abs(shallow_v) < shallow_max))[0]
-    while len(idx) < pool_size and shallow_max < 3.0:
+    confused = np.nonzero((np.abs(ref_v) >= REF_MIN)
+                          & (np.abs(shallow_v) < shallow_max))[0]
+    while len(confused) < pool_size and shallow_max < 3.0:
         shallow_max += 0.5
-        idx = np.nonzero((np.abs(ref_v) >= REF_MIN)
-                         & (np.abs(shallow_v) < shallow_max))[0]
+        confused = np.nonzero((np.abs(ref_v) >= REF_MIN)
+                              & (np.abs(shallow_v) < shallow_max))[0]
+    if len(confused) >= pool_size:
+        idx = confused
+    else:
+        rest = np.setdiff1d(solid, confused)
+        idx = np.concatenate([confused, rest]) if rest.size else confused
+    if not idx.size:
+        raise SystemExit(
+            f"局面池为空:原始 {len(raw)} 个局面中无 |ref| ≥ {REF_MIN} 的局面")
     if len(idx) > pool_size:
         idx = rng.choice(idx, size=pool_size, replace=False)
     idx = np.sort(idx)
@@ -406,8 +407,9 @@ def optimize(args, pool: dict, ref: dict) -> dict:
                         rng.integers(2, min(4, len(keys) + 1))),
                         replace=False):
                     lo, hi = ranges[k]
-                    c[k] = float(np.clip(c[k] * math.exp(rng.normal(0, sigma)),
-                                         lo, hi))
+                    v = float(np.clip(c[k] * math.exp(rng.normal(0, sigma)),
+                                      lo, hi))
+                    c[k] = int(round(v)) if k in _INT_KEYS else v
                 cands.append(c)
             cands.append(champion.copy())          # 父代保底
             tasks = [(c, train_states, args.depth) for c in cands]
@@ -443,7 +445,7 @@ def optimize(args, pool: dict, ref: dict) -> dict:
 def main():
     p = argparse.ArgumentParser(description="启发式 AI 参数优化(局面制适应度)")
     p.add_argument("--group", default="tactical",
-                   choices=("tactical", "positional", "ordering", "all"),
+                   choices=("tactical", "positional", "ordering", "width", "all"),
                    help="优化参数组(默认 tactical=战术/材料评估参数)")
     p.add_argument("--depth", type=int, default=4,
                    help="候选评估搜索深度(权重真正生效的深度,默认 4)")
@@ -468,12 +470,16 @@ def main():
     if not (1 <= args.depth <= 8) or not (1 <= args.ref_depth <= 8):
         p.error("--depth/--ref-depth 1-8")
     keys = group_keys(args.group)
-    ref = defaults_for(keys)                 # 参考权重快照(文件默认值,永不漂移)
+    code_ref = defaults_for(keys)            # 代码常量默认(尚未加载 params.json)
+    h.ensure_params()                        # 再加载 data/params.json
+    ref = defaults_for(keys)                 # 当前生效参数(优化基准,永不漂移)
 
     if args.verify:
         with open(args.out, encoding="utf-8") as f:
             best = json.load(f)
-        verify(best, args, ref)
+        if ref != code_ref:
+            print("检测到 data/params.json,验证对象 = 该文件参数 vs 代码常量默认")
+        verify(best, args, code_ref)         # 对照基线:代码常量默认
         set_params(ref)
         return
 

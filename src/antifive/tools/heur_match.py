@@ -42,7 +42,7 @@ def play(choose_a, choose_b, config, rng, budget_a, budget_b, max_steps=450):
 
 def _task(t):
     seed, depth, budget_a, budget_b, a_first = t
-    import heuristic as h
+    from .. import heuristic as h
 
     def mk(budget):
         def choose(board, player, pending, tc, wt, config, rng, time_budget=None):
@@ -55,8 +55,10 @@ def _task(t):
     rng = np.random.default_rng(seed)
     ch_a, ch_b = mk(budget_a), mk(budget_b)
     if a_first:
-        return play(ch_a, ch_b, cfg, rng, budget_a, budget_b)
-    return play(ch_b, ch_a, cfg, rng, budget_b, budget_a)
+        res = play(ch_a, ch_b, cfg, rng, budget_a, budget_b)
+    else:
+        res = play(ch_b, ch_a, cfg, rng, budget_b, budget_a)
+    return a_first, res
 
 
 def main():
@@ -75,26 +77,27 @@ def main():
     a_wins = b_wins = draws = 0
     t0 = time.perf_counter()
 
-    def handle(i, res):
+    def handle(a_first, res):
         nonlocal a_wins, b_wins, draws
         stats[res] += 1
         if res == "和棋":
             draws += 1
-        elif (res == "黑胜") == (i % 2 == 0):   # a 执黑(i%2==0)且黑胜 → a 胜
+        elif (res == "黑胜") == a_first:        # a 执黑且黑胜 → a 胜
             a_wins += 1
         else:
             b_wins += 1
-        print(f"[{i + 1}/{args.games}] a({'黑' if i % 2 == 0 else '白'},"
-              f"{args.budget_a}s) vs b({'白' if i % 2 == 0 else '黑'},"
-              f"{args.budget_b}s) → {res}", flush=True)
+        print(f"[{a_wins + b_wins + draws}/{args.games}] "
+              f"a({'黑' if a_first else '白'},{args.budget_a}s) vs "
+              f"b({'白' if a_first else '黑'},{args.budget_b}s) → {res}",
+              flush=True)
 
     if args.workers > 1 and args.games > 1:
         with mp.Pool(args.workers) as pool:
-            for i, res in enumerate(pool.imap_unordered(_task, tasks)):
-                handle(i, res)
+            for a_first, res in pool.imap_unordered(_task, tasks):
+                handle(a_first, res)
     else:
-        for i, task in enumerate(tasks):
-            handle(i, _task(task))
+        for task in tasks:
+            handle(*_task(task))
 
     print(f"\n{args.budget_a}s vs {args.budget_b}s 深度{args.depth} {args.games} 局: "
           f"{args.budget_a}s 胜 {a_wins} | {args.budget_b}s 胜 {b_wins} | "
