@@ -26,6 +26,7 @@ weights. All code is MIT-licensed and heavily AI-generated.
 ## 目录
 
 - [项目简介](#项目简介)
+- [在线网页版](#在线网页版)
 - [逆五子棋与发明人](#逆五子棋与发明人)
 - [项目状态(重要,先读)](#项目状态重要先读)
 - [安装](#安装)
@@ -64,6 +65,33 @@ weights. All code is MIT-licensed and heavily AI-generated.
 - **训练代码**:AlphaZero 风格自对弈训练与对启发式的课程训练(总体失败,
   负结果保留);
 - **权重**:自研网络 `.pth`(失败,仅复现用)与 KataGo 逆五 `.bin`(实用)。
+
+## 在线网页版
+
+不安装任何环境,浏览器直接开玩:
+
+**https://guijixzh.github.io/Inverse-Gomoku-GUI-vs-AI/**
+
+- 实现方式:Pyodide(WASM)在 Web Worker 中直接运行本仓库的 numpy 规则引擎与启发式 AI,
+  前端为 TypeScript + Canvas 静态站,托管在 GitHub Pages;
+- 首次打开需下载运行环境(约 10-20MB),之后访问走 Service Worker 缓存;
+  三档难度对应启发式深度 2 / 4 / 8(带时间预算,超时取上一层完整搜索结果);
+- 功能对齐 pygame GUI:落子/占领/安置、危险提示、手数、移子箭头、辅助射线、音效、
+  读秒、复盘手数轴与试下分支、`.afg` 棋谱导入导出、人机/人人/机机模式与全部快捷键;
+- 浏览器内无法运行 KataGo 与 torch 权重,网页版仅提供启发式 AI;需要 KataGo 请用桌面版。
+
+本地开发(需要 Node.js 20+ 与 Python 3.10+,自动构建纯 Python wheel 并准备 Pyodide 资源):
+
+```bash
+cd web
+npm install
+npm run dev      # 本地开发服务器
+npm run build    # 静态产物在 web/dist
+npm run smoke    # 构建后浏览器冒烟测试(需本机 Chrome/Edge)
+```
+
+部署:push 到 `main` 后由 `.github/workflows/pages.yml` 自动构建发布到 GitHub Pages;
+使用自定义域名或用户主页(`<user>.github.io`)时,把工作流里的 `VITE_BASE` 改为 `/`。
 
 ## 逆五子棋与发明人
 
@@ -240,9 +268,11 @@ Inverse-Gomoku-GUI-vs-AI/
 │   ├── record.py               # .afg 棋谱读写
 │   ├── gui.py                  # pygame 图形界面
 │   ├── cli.py                  # 命令行对战
+│   ├── web_api.py              # 网页版 JSON 接口(Pyodide 复用引擎与启发式 AI)
 │   ├── paths.py                # 资源路径定位
 │   ├── training/               # 自对弈与训练
 │   └── tools/                  # 对拍、诊断、参数调优
+├── web/                        # 网页版(Vite + TypeScript + Canvas + Pyodide)
 ├── scripts/setup_env.py        # 环境自检与依赖自动安装(GPU/CPU 自适应)
 ├── config/                     # engines.json 与 gtp_test.cfg
 ├── data/                       # 启发式参数、调参池、示例棋谱

@@ -38,6 +38,18 @@
 | [PyTorch](https://pytorch.org/) | BSD-3-Clause | 自研神经网络与训练(可选) |
 | [pytest](https://pytest.org/) | MIT | 测试(开发依赖,可选) |
 
+## 网页版依赖(`web/`)
+
+| 组件 | 许可证 | 用途 |
+|---|---|---|
+| [Pyodide](https://pyodide.org/) | MPL-2.0 | 浏览器内运行 CPython/NumPy(WASM) |
+| [Vite](https://vite.dev/) | MIT | 前端构建(开发依赖) |
+| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0 | 前端源码语言(开发依赖) |
+| [puppeteer-core](https://pptr.dev/) | Apache-2.0 | 浏览器冒烟测试(开发依赖,可选) |
+
+网页版构建时会下载 Pyodide 运行时与 NumPy 的 WASM wheel 到静态产物中
+(仅部署时生成,不进入 git 仓库);它们的许可证随产物保留。
+
 ## NVIDIA CUDA / cuDNN
 
 KataGo GPU 版运行所需的 CUDA/cuDNN 运行库受 NVIDIA 许可约束,**不随本仓库

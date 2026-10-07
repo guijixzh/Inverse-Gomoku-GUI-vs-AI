@@ -30,6 +30,7 @@ the player who first makes five in a row *loses*). It ships:
 ## Table of Contents
 
 - [Rules](#rules)
+- [Web Version](#web-version)
 - [Inverse Gomoku and Its Inventor](#inverse-gomoku-and-its-inventor)
 - [Project Status (read first)](#project-status-read-first)
 - [Install](#install)
@@ -61,6 +62,39 @@ during the first 2 turns — was proposed by
 > rule. Both share the same losing condition (five in a row loses); Inverse
 > Gomoku adds the capture-and-replace relocation mechanic. Full rules:
 > [`docs/rules.md`](docs/rules.md) (Chinese).
+
+## Web Version
+
+Play in the browser, no installation:
+
+**https://guijixzh.github.io/Inverse-Gomoku-GUI-vs-AI/**
+
+- Pyodide (WASM) runs this repository's numpy engine and heuristic AI inside a
+  Web Worker; the front end is a static TypeScript + Canvas site hosted on
+  GitHub Pages.
+- The first visit downloads the runtime (about 10-20 MB); later visits are served
+  from a Service Worker cache. Three difficulty tiers map to heuristic depths
+  2 / 4 / 8 with a per-move time budget.
+- Feature parity with the pygame GUI: place/capture/relocate, danger hints, move
+  numbers, relocation arrows, helper rays, sounds, clocks, replay timeline with
+  branch trials, `.afg` import/export, and all four play modes.
+- KataGo and the torch network cannot run in the browser; the web version ships
+  the heuristic AI only.
+
+Local development (Node.js 20+ and Python 3.10+; the wheel and Pyodide assets are
+prepared automatically):
+
+```bash
+cd web
+npm install
+npm run dev      # dev server
+npm run build    # static output in web/dist
+npm run smoke    # browser smoke test after build (needs local Chrome/Edge)
+```
+
+Pushing to `main` triggers `.github/workflows/pages.yml`, which builds and
+deploys to GitHub Pages. For a custom domain or a user site (`<user>.github.io`),
+change `VITE_BASE` to `/` in the workflow.
 
 ## Inverse Gomoku and Its Inventor
 
@@ -210,9 +244,10 @@ heuristic engine). Details and possible causes:
 ```
 Inverse-Gomoku-GUI-vs-AI/
 ├── src/antifive/            # rules engine, MCTS, network, heuristic, tactics,
-│   ├── gui.py cli.py paths.py
+│   ├── gui.py cli.py paths.py web_api.py
 │   ├── training/            # self-play and training pipeline
 │   └── tools/               # matches, diagnostics, parameter tuning
+├── web/                     # web version (Vite + TypeScript + Canvas + Pyodide)
 ├── config/                  # engines.json, gtp_test.cfg
 ├── data/                    # params, eval pool, sample .afg records
 ├── models/                  # weights (see models/README.md)

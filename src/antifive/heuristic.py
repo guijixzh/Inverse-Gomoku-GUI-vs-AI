@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import argparse
-import multiprocessing as mp
 import os
 import time
 from collections import OrderedDict
@@ -1046,6 +1045,7 @@ def _play_task(args_task):
 
 
 def main():
+    import multiprocessing as mp     # 惰性导入:Pyodide 等无 multiprocessing 环境可正常 import 本模块
     p = argparse.ArgumentParser(description="启发式小 AI 批量生成基础棋谱")
     p.add_argument("--games", type=int, default=1000, help="生成局数")
     p.add_argument("--out", default="records", help="输出根目录(按结果分类子目录)")

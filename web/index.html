@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#deb280" />
+    <meta name="description" content="逆五子棋 Antifive 在线版：连成五子者判负，支持落子与移子（占领+安置），启发式 AI 三档难度，浏览器直接开玩。" />
+    <title>逆五子棋 Antifive · 在线对战</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23deb280'/%3E%3Cpath d='M12 12h40v40H12z' fill='none' stroke='%234e3414' stroke-width='2'/%3E%3Ccircle cx='24' cy='24' r='9' fill='%23222'/%3E%3Ccircle cx='40' cy='40' r='9' fill='%23f5f2ea' stroke='%23bbb'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <div id="loading-text">正在加载引擎…</div>
+      <div id="loading-detail" class="loading-detail"></div>
+      <div class="loading-tip">首次打开需下载运行环境（约 10-20MB），之后访问将走缓存</div>
+    </div>
+
+    <header class="topbar">
+      <h1>逆五子棋 <span>Antifive</span></h1>
+      <div class="topbar-hint">连成五子者判负 · 15×15 · 黑先 · 可落子/移子</div>
+    </header>
+
+    <main id="app">
+      <section class="board-area">
+        <div class="board-shell">
+          <canvas id="board"></canvas>
+          <div id="result-overlay" class="result-overlay hidden"></div>
+        </div>
+        <div class="bottom">
+          <div class="toolbar" id="toggle-btns"></div>
+          <div class="review-bar hidden" id="review-bar">
+            <div class="review-buttons" id="review-buttons"></div>
+            <div class="timeline-wrap"><canvas id="timeline"></canvas></div>
+            <div class="review-pos" id="review-pos"></div>
+          </div>
+          <div class="shortcuts">
+            R新局 U悔棋 D危险 N手数 A箭头 H射线 M音效 S保存 L读取 E设定 1-4模式 ←→复盘
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="clock-card">
+          <div class="clock-title">
+            AI 读秒
+            <span id="ai-indicator" class="indicator"></span>
+            <span id="ai-state">AI空闲</span>
+          </div>
+          <div class="clock-row">
+            <span id="clock" class="clock">不限时</span>
+            <span id="ai-compute" class="compute"></span>
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="info-engine">启发式 AI</div>
+          <div class="info-grid">
+            <span class="k">限时</span><span class="v" id="info-limit">不限时</span>
+            <span class="k">参数</span><span class="v" id="info-param">深度 4 层</span>
+            <span class="k" id="info-step-label">手数</span><span class="v" id="info-step">1 / 0</span>
+            <span class="k">行棋</span><span class="v" id="info-mover">黑(你)·落子</span>
+          </div>
+          <div class="status-strip" id="status-strip" data-kind="normal">落子待定 · 可占敌移子</div>
+        </div>
+        <div class="notify" id="notify">暂无提示</div>
+        <div class="buttons" id="buttons"></div>
+        <div class="rules">
+          <p>1. 胜负：连成五子者输。</p>
+          <p>2. 落子：黑先白后，在交叉点上落子。</p>
+          <p>3. 推子：落在对方棋子上时，使对方棋子在八个方向上移动任意格，但无法越过其他棋子。</p>
+          <p>4. 禁手：白前两手禁止推子，禁止自杀着，禁止无路线推子。</p>
+        </div>
+        <div class="credit">原 GUI by 硅基飙尘葆光 · 网页版基于 Pyodide</div>
+      </aside>
+    </main>
+
+    <div id="settings" class="modal hidden">
+      <div class="modal-card">
+        <h2>设定</h2>
+        <div class="field">
+          <label>AI 难度</label>
+          <div class="radios" id="tier-radios"></div>
+        </div>
+        <div class="field">
+          <label>对局限时</label>
+          <div class="radios" id="limit-radios"></div>
+          <label class="seconds">读秒秒数 <input id="limit-seconds" type="number" min="1" max="600" step="1" /></label>
+        </div>
+        <div class="modal-actions">
+          <button id="settings-cancel">取消</button>
+          <button id="settings-apply" class="primary">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <input id="file-input" type="file" accept=".afg,.txt" hidden />
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

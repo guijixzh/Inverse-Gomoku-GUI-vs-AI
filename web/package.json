@@ -1,0 +1,21 @@
+{
+  "name": "antifive-web",
+  "private": true,
+  "version": "0.9.0",
+  "type": "module",
+  "scripts": {
+    "prepare:assets": "node scripts/prepare-assets.mjs",
+    "dev": "npm run prepare:assets && vite",
+    "build": "npm run prepare:assets && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "pyodide": "314.0.7"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.3"
+  }
+}
