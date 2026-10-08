@@ -244,6 +244,18 @@ def test_find_forced_kill_budget_fallback():
                                node_cap=1) is None
 
 
+def test_vcf_defaults_and_budget_slice():
+    """深杀修复:v5.1 默认深度 8/节点 60000;有对局限时时预算按 5% 放宽,
+    夹在 [VCF_TIME_CAP, 0.6s]。"""
+    from antifive.heuristic import _vcf_slice
+    assert ts.VCF_MAX_DEPTH >= 8
+    assert ts.VCF_NODE_CAP >= 60000
+    assert _vcf_slice(None) == ts.VCF_TIME_CAP
+    assert _vcf_slice(12.0) == 0.6
+    assert abs(_vcf_slice(2.0) - 0.1) < 1e-9
+    assert _vcf_slice(0.5) == ts.VCF_TIME_CAP
+
+
 def test_choose_uses_vcf():
     board = _board(DOUBLE_FIXTURE)
     forced = ts.find_forced_kill(board, B, -1, 20, 5, CFG, max_depth=6)

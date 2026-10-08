@@ -17,9 +17,9 @@
   既不能给对手加子,也不能清出线路)。
 
 任何"必胜"结论都基于完全枚举证明;超时/超节点一律返回未知(不主张胜利)。
-开关与预算环境变量:ANTIFIVE_VCF=0 关闭;ANTIFIVE_VCF_DEPTH(默认 6)、
-ANTIFIVE_VCF_BUDGET 秒(默认 0.05;等时对拍显示 0.3s 过贵,0.05s 净增益)、
-ANTIFIVE_VCF_NODES(默认 20000)。
+开关与预算环境变量:ANTIFIVE_VCF=0 关闭;ANTIFIVE_VCF_DEPTH(默认 8)、
+ANTIFIVE_VCF_BUDGET 秒(默认 0.05,调用方有对局限时时会按剩余预算放宽,
+见 heuristic._vcf_slice)、ANTIFIVE_VCF_NODES(默认 60000)。
 """
 
 from __future__ import annotations
@@ -59,9 +59,9 @@ def _env_float(name: str, default: float) -> float:
 
 
 USE_VCF = _env_flag("ANTIFIVE_VCF", True)
-VCF_MAX_DEPTH = _env_int("ANTIFIVE_VCF_DEPTH", 6)
+VCF_MAX_DEPTH = _env_int("ANTIFIVE_VCF_DEPTH", 8)
 VCF_TIME_CAP = _env_float("ANTIFIVE_VCF_BUDGET", 0.05)
-VCF_NODE_CAP = _env_int("ANTIFIVE_VCF_NODES", 20000)
+VCF_NODE_CAP = _env_int("ANTIFIVE_VCF_NODES", 60000)
 MEMO_CAP = 50000
 KILL_CACHE_CAP = 4096
 

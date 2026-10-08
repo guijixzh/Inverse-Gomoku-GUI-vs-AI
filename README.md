@@ -254,9 +254,10 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 
 启发式 AI 启动时会自动加载 `data/params.json` 中的调优参数(仅白名单评估/排序键;
 `ANTIFIVE_NO_PARAMS=1` 可关闭),置换表大小可用 `ANTIFIVE_TT_BITS` 调整(网页版等
-低内存环境可设 19-20)。对弈与分析默认启用独立强制杀链搜索(VCF 类,证明式必胜,
-预算 `ANTIFIVE_VCF_BUDGET` 默认 0.05s/步,`ANTIFIVE_VCF=0` 关闭,
-`ANTIFIVE_VCF_DEPTH` 默认 6);桌面与网页的「设定」面板均可切换引擎版本(新版/
+低内存环境可设 19-20)。对弈与分析默认启用独立强制杀链搜索(VCF 类,证明式必胜):
+基础预算 `ANTIFIVE_VCF_BUDGET` 默认 0.05s,有对局限时时按剩余预算的 5% 放宽
+(上限 0.6s,见 `heuristic._vcf_slice`),`ANTIFIVE_VCF=0` 关闭,
+`ANTIFIVE_VCF_DEPTH` 默认 8;桌面与网页的「设定」面板均可切换引擎版本(新版/
 老版)与 VCF 开关,默认**新版 + VCF 开**。搜索基准与新旧对拍:
 
 ```bash

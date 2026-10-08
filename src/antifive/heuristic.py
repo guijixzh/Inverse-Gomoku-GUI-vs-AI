@@ -11,9 +11,14 @@ v5(2026-10-08,基于 KataGo 自对弈复盘归因的修复):
 - 置换表在子节点被强制扩展时按 depth-1 保守存表,避免其他路径按标称深度
   复用到被抬高的分值。
 
+v5.1(2026-10-08,VCF 深杀修复):
+- VCF 默认深度 6→8、节点上限 20000→60000;有对局限时时预算按剩余时间的
+  5% 放宽(夹在 [0.05s, 0.6s],见 _vcf_slice)。复盘:用户局 step75 的白
+  I13 强制胜须 d8/0.5s 才可证,旧 0.05s 漏掉;
+
 v4:接入独立强制杀链搜索(threat_search,VCF 类;对弈与分析默认启用,
-预算 0.05s/步,ANTIFIVE_VCF=0 可关闭),证明"无论对手如何防守都会在有限
-步内被完成连五"的强制胜;找不到或超时自动回退常规搜索。
+ANTIFIVE_VCF=0 可关闭),证明"无论对手如何防守都会在有限步内被完成连五"
+的强制胜;找不到或超时自动回退常规搜索。
 
 v3 优化(相对 tools/heuristic_v2.py 冻结快照):
 - 调优参数运行时加载(data/params.json,ANTIFIVE_NO_PARAMS=1 可关闭;
@@ -669,10 +674,11 @@ def _place_targets(board: np.ndarray, c: int) -> list:
 
 def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
                 white_turns: int, config: GameConfig, k: int,
-                history=None, out_legal=None) -> list:
+                history=None, out_legal=None, diversity: bool = False) -> list:
     """选择性候选着法 [(排序分, move), ...] 降序。杀/解杀/堵路线 + 前 k 构造与位置着。
     history: 可选历史启发分数组(参与入选排序);
-    out_legal: 可选 list,回填合法掩码数组(避免调用方重复计算掩码)。"""
+    out_legal: 可选 list,回填合法掩码数组(避免调用方重复计算掩码);
+    diversity: 根节点专用,额外保留"贴己方棋群/安静关键点"型着法入候选。"""
     opp = _other(player)
     mask = ReverseGomoku.legal_mask_for(board, player, pending, white_turns,
                                         config, turn_count)
@@ -733,7 +739,7 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
                 order = scored[idx]
             idx = idx[np.argsort(order)[::-1]]
             out.extend((float(s_vec[rest_arr[j]]), int(rest_arr[j])) for j in idx)
-        if k >= ROOT_K:
+        if diversity:
             _append_diversity(out, legal, nb_self_f)
         return sorted(out, reverse=True)
     ends, route = _threats(board, player, white_turns, turn_count, config)
@@ -818,7 +824,7 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
         idx = np.argpartition(key, -m)[-m:]
         idx = idx[np.argsort(key[idx])[::-1]]
         out.extend((float(cap_scores[j]), int(cap_cells[j])) for j in idx)
-    if k >= ROOT_K:
+    if diversity:
         _append_diversity(out, legal, nb_self_f)
     return sorted(out, reverse=True)
 
@@ -1025,6 +1031,16 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
     return best
 
 
+def _vcf_slice(time_budget: float | None) -> float:
+    """单步 VCF 预算:无对局限时时用模块默认(0.05s);有 budget 时按其 5%
+    放宽并夹在 [VCF_TIME_CAP, 0.6s]。深一层的杀链证明需要更大预算(复盘:
+    用户局 step75 的白 I13 强制胜须 d8/0.5s 才可证,旧 0.05s 漏掉)。"""
+    base = threat_search.VCF_TIME_CAP
+    if not time_budget:
+        return base
+    return min(0.6, max(base, 0.05 * time_budget))
+
+
 def _root_iterative(board, player, pending, turn_count, white_turns, config,
                     rng, depth, time_budget, k, node_cb=None, report_cb=None,
                     tt=None, noise: float = 0.0):
@@ -1038,7 +1054,7 @@ def _root_iterative(board, player, pending, turn_count, white_turns, config,
     无任何合法着法时 ok=False(调用方决定返回 None 还是空列表)。"""
     opp = _other(player)
     cands = _candidates(board, player, pending, turn_count, white_turns,
-                        config, ROOT_K)
+                        config, ROOT_K, diversity=True)
     if not cands:
         # 必守剪枝可能把候选全部剪掉(被绝杀且无防守招):此刻仍有合法着法,
         # 把全部合法着法交给迭代加深搜索——将死值带 ply 步数(见 _search),
@@ -1140,9 +1156,7 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
         if kc:
             return int(rng.choice([c for c, _ in kc]))
     if threat_search.USE_VCF if use_vcf is None else use_vcf:
-        vcf_slice = threat_search.VCF_TIME_CAP
-        if time_budget:
-            vcf_slice = min(vcf_slice, 0.15 * time_budget)
+        vcf_slice = _vcf_slice(time_budget)
         if vcf_slice > 0:
             mv = threat_search.find_forced_kill(
                 board, player, pending, turn_count, white_turns, config,
@@ -1211,9 +1225,7 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
             progress_cb(moves[:k])
         return (moves[0][1], moves[:k])
     if threat_search.USE_VCF if use_vcf is None else use_vcf:
-        vcf_slice = threat_search.VCF_TIME_CAP
-        if time_budget:
-            vcf_slice = min(vcf_slice, 0.15 * time_budget)
+        vcf_slice = _vcf_slice(time_budget)
         if vcf_slice > 0:
             mv = threat_search.find_forced_kill(
                 board, player, pending, turn_count, white_turns, config,
