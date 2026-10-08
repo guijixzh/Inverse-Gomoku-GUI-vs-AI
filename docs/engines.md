@@ -28,6 +28,13 @@ python -m antifive.gui --model models/best_model.pth
 --heuristic-version new|old --no-vcf`。参数可被 `data/params.json` 复现,
 调优工具见 `src/antifive/tools/param_tune.py`。
 
+对拍(等时强弱回归;`heuristic_v4.py` 为 2026-10-08 搜索一致性修复前的冻结快照):
+
+```bash
+python -m antifive.tools.match_ai --games 40 --depth 8 --budget 1 --workers 8 \
+    --old-module antifive.tools.heuristic_v4
+```
+
 ## KataGo(逆五规则)
 
 ### 权重

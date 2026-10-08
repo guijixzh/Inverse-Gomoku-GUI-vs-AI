@@ -38,14 +38,61 @@ def test_choose_and_analysis_dispatch(version, use_vcf):
     assert float(pv) == float(pv)   # 非 NaN(老版返回 np.float32)
 
 
-def test_use_vcf_flag_off_matches_snapshot():
-    from antifive.tools import heuristic_v3
+def test_use_vcf_off_skips_vcf_and_matches_analysis(monkeypatch):
+    """use_vcf=False 时不调用杀链搜索,且 choose 与 analysis 根评估一致。
+
+    注:不再要求与 v3 快照逐着相等——候选生成/根窗口/占领步符号已按
+    KataGo 复盘结论有意修复(见 test_choose_analysis_consistency)。"""
+    from antifive import heuristic as h
+    from antifive import threat_search
+
+    def _boom(*a, **k):
+        raise AssertionError("use_vcf=False 仍调用了 VCF")
+
+    monkeypatch.setattr(threat_search, "find_forced_kill", _boom)
     g = ReverseGomoku()
-    move = hv.choose("new", *_args(g), np.random.default_rng(7), depth=2,
-                     use_vcf=False)
-    ref = heuristic_v3.choose_heuristic_move(*_args(g),
-                                             np.random.default_rng(7), depth=2)
-    assert move == ref
+    for depth in (2, 3):
+        move = hv.choose("new", *_args(g), np.random.default_rng(7),
+                         depth=depth, use_vcf=False)
+        _, moves = h.analysis_moves(*_args(g), np.random.default_rng(7),
+                                    depth=depth, use_vcf=False)
+        assert dict(moves).get(int(move), -1e18) \
+            >= moves[0][1] - h.O_NOISE - 1e-9
+
+
+def test_choose_analysis_consistency():
+    """根剪枝不得让 choose 偏离 analysis:选中着法的根价值须在最优值
+    的噪声带内(占领/安置/普通着法混用局面,含中盘随机局面)。"""
+    from antifive import heuristic as h
+    from antifive.tools import heuristic_v4
+    games = []
+    rng0 = np.random.default_rng(20261008)
+    for _ in range(3):
+        g = ReverseGomoku()
+        for _ in range(14):
+            if g.game_over:
+                break
+            legal = np.nonzero(g.legal_mask())[0]
+            if not legal.size:
+                break
+            g.make_move(int(rng0.choice(legal)))
+        if not g.game_over:
+            games.append(g)
+    assert len(games) >= 2
+    for g in games:
+        for seed in (0, 3):
+            _, moves = h.analysis_moves(*_args(g), np.random.default_rng(seed),
+                                        depth=3, k=6, use_vcf=False)
+            top_v = moves[0][1]
+            for rp in (True, False):
+                mv = h.choose_heuristic_move(
+                    *_args(g), np.random.default_rng(seed), depth=3,
+                    use_vcf=False, root_prune=rp)
+                val = dict(moves).get(int(mv), -1e18)
+                assert val >= top_v - h.O_NOISE - 1e-9, \
+                    f"choose(root_prune={rp}) 偏离 analysis: {mv} v={val} top={top_v}"
+    # 冻结快照仍可加载(供 match_ai --old-module A/B)
+    assert heuristic_v4.choose_heuristic_move is not None
 
 
 def test_gui_engine_accepts_version_and_vcf():

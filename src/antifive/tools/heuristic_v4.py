@@ -1,15 +1,8 @@
-"""启发式小 AI(强化版):极小化搜索 + 全局局面评估 + 选择性候选着法
+"""启发式小 AI(强化版,冻结快照 v4)
 
-v5(2026-10-08,基于 KataGo 自对弈复盘归因的修复):
-- 修复 choose 根搜索两处错误:①占领步后同一方继续安置,子节点视角与根
-  相同,旧实现却取了负并套用反向窄窗;②窄窗 fail-soft 返回的上界可能虚高,
-  被直接采纳。现在 choose 与 analysis 共用同一根搜索实现(_root_iterative,
-  逐层全窗口根评估),引擎落子与其自分析严格一致;
-- 候选生成与搜索历史解耦(选取只看静态分,历史仅参与排序),并新增多样性
-  候选(贴己方棋群/安静关键点型着法);KataGo 首选落在 ROOT_K 窗口内的
-  比例显著提升(旧对局 16/52 → 12/52,新自对弈 6/33);
-- 置换表在子节点被强制扩展时按 depth-1 保守存表,避免其他路径按标称深度
-  复用到被抬高的分值。
+本文件是 2026-10-08 根剪枝/候选/搜索一致性修复之前的完整快照,
+只用于新旧对拍(`tools/match_ai.py --old-module antifive.tools.heuristic_v4`)
+与回退参考。功能与当时的 antifive.heuristic 完全一致(v4+VCF)。
 
 v4:接入独立强制杀链搜索(threat_search,VCF 类;对弈与分析默认启用,
 预算 0.05s/步,ANTIFIVE_VCF=0 可关闭),证明"无论对手如何防守都会在有限
@@ -58,15 +51,15 @@ from pathlib import Path
 
 import numpy as np
 
-from . import record as record_mod
-from .paths import data_dir
-from .reversegomoku import (
+from .. import record as record_mod
+from ..paths import data_dir
+from ..reversegomoku import (
     BLACK, BOARD_SIZE, DIRECTIONS, EMPTY, GameConfig, LINE_IDX, MOVE_DIRS,
     MOVE_DISTS, PLACE_SIZE, RAYS, ReverseGomoku, WHITE, danger_map_for,
     fwd_run_lengths,
 )
-from . import threat_search
-from .tactics import (
+from .. import threat_search
+from ..tactics import (
     jump_through as _jump_through, kill_captures, kill_placements, kill_samples,
 )
 
@@ -723,18 +716,12 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
             s_vec += (O_BLOCK_SELF4 * (lt_self_f >= 4)
                       + O_BLOCK_SELF3 * (lt_self_f == 3))
             scored = s_vec[rest_arr] + (nb_self_f[rest_arr] + nb_opp_f[rest_arr]) * 1e-4
-            # 选取只用静态分(与搜索顺序/历史无关,保证候选集合可复现);
-            # 历史启发仅参与已入选着法的最终排序
+            if hist_f is not None:
+                scored = scored + hist_f[rest_arr]
             m = min(k, rest_arr.size)
             idx = np.argpartition(scored, -m)[-m:]
-            if hist_f is not None:
-                order = scored[idx] + hist_f[rest_arr[idx]]
-            else:
-                order = scored[idx]
-            idx = idx[np.argsort(order)[::-1]]
+            idx = idx[np.argsort(scored[idx])[::-1]]
             out.extend((float(s_vec[rest_arr[j]]), int(rest_arr[j])) for j in idx)
-        if k >= ROOT_K:
-            _append_diversity(out, legal, nb_self_f)
         return sorted(out, reverse=True)
     ends, route = _threats(board, player, white_turns, turn_count, config)
     kc = kill_captures(board, player, pending, turn_count, white_turns,
@@ -774,21 +761,16 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
     base = np.where(lt_self_f >= 4, O_OWN4,
                     np.where(lt_self_f == 3, O_OWN3, 0.0))
     base += nb_opp_f * O_FIGHT - nb_self_f * O_SPREAD
+    if hist_f is not None:
+        base = base + hist_f
     # 平局键:分降序、move 降序(与旧实现完全一致,保持树形稳定)
     dens = -(np.arange(PLACE_SIZE) * 1e-9).astype(np.float64)
     empty_cells = rest_arr[empty_f[rest_arr]]
     if empty_cells.size:
-        # 选取用静态分(与历史/搜索顺序无关,保证候选集合可复现);
-        # 历史启发只参与入选后的排序
         key = base[empty_cells] + dens[empty_cells]
         m = min(k, empty_cells.size)
         idx = np.argpartition(key, -m)[-m:]
-        if hist_f is not None:
-            order = base[empty_cells][idx] + hist_f[empty_cells[idx]] \
-                + dens[empty_cells][idx]
-        else:
-            order = key[idx]
-        idx = idx[np.argsort(order)[::-1]]
+        idx = idx[np.argsort(key[idx])[::-1]]
         out.extend((float(base[empty_cells[j]]), int(empty_cells[j])) for j in idx)
     cap_cells = rest_arr[~empty_f[rest_arr]]
     if cap_cells.size:
@@ -818,8 +800,6 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
         idx = np.argpartition(key, -m)[-m:]
         idx = idx[np.argsort(key[idx])[::-1]]
         out.extend((float(cap_scores[j]), int(cap_cells[j])) for j in idx)
-    if k >= ROOT_K:
-        _append_diversity(out, legal, nb_self_f)
     return sorted(out, reverse=True)
 
 
@@ -874,26 +854,6 @@ def _include_extras(cands: list, extras, mask) -> None:
         cands.insert(pos, (1e-6, m))
 
 
-def _append_diversity(out: list, legal, nb_self_f: np.ndarray,
-                      limit: int = 2) -> None:
-    """补充至多 limit 个"己方邻接度最高"的着法(去重、低分)。
-
-    静态分体系(推中/造对方连珠/避贴己方)会系统性埋没"贴着己方棋群/安静
-    关键点"型着法,而实战复盘显示 kata 的首选常属此类;这里额外保留少量
-    此类着法进入根候选,保证它们至少被搜索看到(不影响原有候选优先级)。"""
-    if limit <= 0:
-        return
-    present = {m for _, m in out}
-    pool = [int(t) for t in legal if int(t) not in present]
-    if not pool:
-        return
-    arr = np.asarray(pool, dtype=np.int64)
-    n = min(limit, arr.size)
-    ii = np.argpartition(nb_self_f[arr], -n)[-n:]
-    for j in ii:
-        out.append((float(nb_self_f[arr[j]]) * 1e-3, int(arr[j])))
-
-
 def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
             white_turns: int, config: GameConfig, depth: int,
             alpha: float, beta: float, ctx: _SearchCtx,
@@ -944,7 +904,6 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
     best_move = None
     alpha0 = alpha
     searched = False
-    ext_used = False                  # 本节点是否对子节点做过强制扩展(存表降标用)
     for idx, (_, m) in enumerate(cands):
         if ctx.deadline is not None and (idx & 3) == 0 \
                 and time.perf_counter() > ctx.deadline:
@@ -980,7 +939,6 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
                 # 多搜一层几乎不增加分支,沿强制链看得更深
                 d2 = depth
                 ext_budget = 0
-                ext_used = True
             if not searched or not USE_PVS:
                 v = -_search(b2, p2, pend2, tc2, wt2, config, d2,
                              -beta, -alpha, ctx, ext_budget=ext_budget,
@@ -1019,93 +977,8 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
                 flag = _TT.FLAG_LOWER
             else:
                 flag = _TT.FLAG_EXACT
-            # 子节点被强制扩展时分值来自更深的实际搜索,按 depth-1 保守
-            # 标注存表,防止其他路径按标称 depth 复用到被抬高的值
-            tt.store(key, depth - 1 if ext_used else depth, best, flag, best_move)
+            tt.store(key, depth, best, flag, best_move)
     return best
-
-
-def _root_iterative(board, player, pending, turn_count, white_turns, config,
-                    rng, depth, time_budget, k, node_cb=None, report_cb=None,
-                    tt=None, noise: float = 0.0):
-    """根节点迭代加深公共实现:choose 与 analysis 共用,保证两者同值同选。
-
-    先验杀着与 VCF 由调用方处理;这里只做"候选生成 + 逐层全窗口根评估"。
-    noise>0 时给每个根着法价值加 [0, noise) 随机量(仅对局侧用于同分打散,
-    分析传 0)。node_cb(节点数) 与 report_cb(候选列表) 语义不同,分别对应
-    choose 与 analysis 的进度回调。
-    返回 (ranked, ok):ranked = 最后一次完整深度的 [(着法, 价值)] 降序;
-    无任何合法着法时 ok=False(调用方决定返回 None 还是空列表)。"""
-    opp = _other(player)
-    cands = _candidates(board, player, pending, turn_count, white_turns,
-                        config, ROOT_K)
-    if not cands:
-        # 必守剪枝可能把候选全部剪掉(被绝杀且无防守招):此刻仍有合法着法,
-        # 把全部合法着法交给迭代加深搜索——将死值带 ply 步数(见 _search),
-        # 搜索自动挑"手数最长的必败招",挣扎到最后一手再被绝杀,自然终局;
-        # 只有真正无合法着法(全为自杀被剔除)才由调用方判定失败。
-        legal_all = np.nonzero(ReverseGomoku.legal_mask_for(
-            board, player, pending, white_turns, config, turn_count))[0]
-        if not legal_all.size:
-            return [], False
-        cands = [(0.0, int(m)) for m in legal_all]
-    ctx = _SearchCtx(tt if tt is not None else _TT(),
-                     time.perf_counter() + time_budget if time_budget else None)
-    ctx.cb = node_cb
-    prev_m = None
-    ranked = []
-    for d in range(1, depth + 1):
-        depth_moves = []
-        completed = True
-        cands2 = cands[:]
-        if prev_m is not None:
-            _bring_front(cands2, prev_m)   # 上一深度最佳着法优先(排序加速)
-        for _, m in cands2:
-            r, c = divmod(int(m), BOARD_SIZE)
-            b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
-                board, m, player, pending, turn_count, white_turns, config)
-            if loser == player:
-                continue
-            if loser == opp:
-                v = WIN - 1                # 根着法第 1 步即杀
-            elif np.count_nonzero(b2) == PLACE_SIZE:
-                v = 0.0
-            elif pend2 >= 0:
-                # 占领步后同一方继续安置,子节点视角与根一致,不取负
-                v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                            -1e18, 1e18, ctx, ext_budget=1, ply=2)
-            elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
-                               pending % BOARD_SIZE if pending >= 0 else c,
-                               player) >= 4 \
-                    and _loses_to_kill(b2, player, wt2, tc2, config):
-                v = -(WIN - 1)             # 第 1 步即送杀
-            else:
-                v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                             -1e18, 1e18, ctx, ext_budget=1, ply=2)
-            if noise > 0.0:
-                v += rng.uniform(0.0, noise)
-            depth_moves.append((int(m), v))
-            if node_cb is not None:
-                node_cb(ctx.nodes)
-            if ctx.aborted or (ctx.deadline is not None
-                               and time.perf_counter() > ctx.deadline):
-                completed = False
-                break
-        if not completed or not depth_moves:
-            break
-        depth_moves.sort(key=lambda t: -t[1])
-        ranked = depth_moves
-        prev_m = ranked[0][0]
-        if report_cb is not None:
-            report_cb(ranked[:k])
-        if ranked[0][1] >= WIN - 1:
-            break                          # 根着法即必杀,无需更深;
-                                           # 必败不提前停:继续加深细化抵抗
-        if ctx.deadline is not None and time.perf_counter() > ctx.deadline:
-            break
-    if not ranked:
-        ranked = [(int(cands[0][1]), 0.0)]  # 兜底:静态分最高(仅极端超时)
-    return ranked, True
 
 
 def choose_heuristic_move(board, player, pending, turn_count, white_turns,
@@ -1116,10 +989,9 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                           use_vcf: bool | None = None) -> int | None:
     """返回着法 idx;无子可走(所有着法均自杀)返回 None。
     progress_cb(节点数) 可选:搜索途中定期回调,供 GUI 实时显示计算量。
-    tt: 可选置换表(跨步复用,键含完整状态,安全);
+    tt: 可选置换表(跨步复用,键含完整状态,安全);root_prune=False 时
+    根着法全部用全窗口精确求解(仅供对拍/调试,速度慢);
     use_vcf: 是否启用强制杀链搜索(None=用 threat_search.USE_VCF 全局默认)。
-    root_prune: 已废弃(保留仅为兼容旧调用);根搜索与 analysis_moves
-    共用同一全窗口实现,保证"引擎落子与其自分析一致"。
 
     先验:存在一步/两步杀直接走(精确必胜,免搜索);
     否则迭代加深:从深度 1 逐层加深,time_budget(秒)内完成多少算多少,
@@ -1151,15 +1023,79 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                 progress_cb=progress_cb)
             if mv is not None:
                 return int(mv)
-    # 与 analysis 共用同一根搜索实现(全窗口逐着法评估),保证"引擎下的棋
-    # 与其自分析一致";噪声只用于同分打散。root_prune 参数已废弃(保留兼容)。
-    ranked, ok = _root_iterative(board, player, pending, turn_count,
-                                 white_turns, config, rng, depth, time_budget,
-                                 ROOT_K, node_cb=progress_cb, tt=tt,
-                                 noise=O_NOISE)
-    if not ok or not ranked:
-        return None
-    return int(ranked[0][0])
+    cands = _candidates(board, player, pending, turn_count, white_turns,
+                        config, ROOT_K)
+    if not cands:
+        # 必守剪枝可能把候选全部剪掉(被绝杀且无防守招):此刻仍有合法着法,
+        # 把全部合法着法交给迭代加深搜索——将死值带 ply 步数(见 _search),
+        # 搜索自动挑"手数最长的必败招",挣扎到最后一手再被绝杀,自然终局;
+        # 只有真正无合法着法(全为自杀被剔除)才认输返回 None。
+        legal_all = np.nonzero(ReverseGomoku.legal_mask_for(
+            board, player, pending, white_turns, config, turn_count))[0]
+        if not legal_all.size:
+            return None
+        cands = [(0.0, int(m)) for m in legal_all]
+    ctx = _SearchCtx(tt if tt is not None else _TT(),
+                     time.perf_counter() + time_budget if time_budget else None)
+    ctx.cb = progress_cb
+    best_m, best_v = None, -1e18
+    prev_m = None
+    for d in range(1, depth + 1):
+        depth_best_m, depth_best_v = None, -1e18
+        alpha_root = -1e18
+        completed = True
+        cands2 = cands[:]
+        if prev_m is not None:
+            _bring_front(cands2, prev_m)  # 上一深度 PV 着法优先(排序加速剪枝)
+        for _, m in cands2:
+            r, c = divmod(int(m), BOARD_SIZE)
+            b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
+                board, m, player, pending, turn_count, white_turns, config)
+            if loser == player:
+                continue
+            # 根 α 传播:后续着法用 (-inf, -(α-噪声)) 窄窗,失败退回全窗口;
+            # 根着法即杀/送杀为精确值,不参与窗口。噪声预留避免边界遗漏。
+            if not root_prune or alpha_root <= -1e17:
+                w_lo, w_hi = -1e18, 1e18
+            else:
+                w_lo, w_hi = -1e18, -(alpha_root - O_NOISE)
+            if loser == opp:
+                v = WIN - 1               # 根着法第 1 步即杀
+            elif np.count_nonzero(b2) == PLACE_SIZE:
+                v = 0.0
+            elif pend2 >= 0:
+                v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                            w_lo, w_hi, ctx, ext_budget=1, ply=2)
+            elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
+                               pending % BOARD_SIZE if pending >= 0 else c,
+                               player) >= 4 \
+                    and _loses_to_kill(b2, player, wt2, tc2, config):
+                v = -(WIN - 1)            # 第 1 步即送杀
+            else:
+                v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                             w_lo, w_hi, ctx, ext_budget=1, ply=2)
+            v += rng.uniform(0, O_NOISE)
+            if v > depth_best_v:
+                depth_best_v, depth_best_m = v, m
+            if v > alpha_root:
+                alpha_root = v
+            if progress_cb is not None:
+                progress_cb(ctx.nodes)
+            if ctx.aborted or (ctx.deadline is not None
+                               and time.perf_counter() > ctx.deadline):
+                completed = False
+                break
+        if completed and depth_best_m is not None:
+            best_m, best_v = depth_best_m, depth_best_v
+            prev_m = depth_best_m
+            if depth_best_v >= WIN - 1:
+                break                    # 根着法即必杀,无需再深;
+                                         # 必败不提前停:继续加深以细化最长抵抗
+        if ctx.deadline is not None and time.perf_counter() > ctx.deadline:
+            break
+    if best_m is None:
+        return int(cands[0][1])          # 兜底:静态分最高(仅极端超时)
+    return best_m
 
 
 def _terminal_winner(board: np.ndarray):
@@ -1224,12 +1160,64 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
                 if progress_cb:
                     progress_cb(moves[:k])
                 return (moves[0][1], moves[:k])
-    ranked, ok = _root_iterative(board, player, pending, turn_count,
-                                 white_turns, config, rng, depth, time_budget,
-                                 k, report_cb=progress_cb, tt=tt)
-    if not ok or not ranked:
-        return (0.0, [])
-    return (ranked[0][1], ranked[:k])
+    cands = _candidates(board, player, pending, turn_count, white_turns,
+                        config, ROOT_K)
+    if not cands:
+        legal_all = np.nonzero(ReverseGomoku.legal_mask_for(
+            board, player, pending, white_turns, config, turn_count))[0]
+        if not legal_all.size:
+            return (0.0, [])
+        cands = [(0.0, int(m)) for m in legal_all]
+    ctx = _SearchCtx(tt if tt is not None else _TT(),
+                     time.perf_counter() + time_budget if time_budget else None)
+    prev_m = None
+    for d in range(1, depth + 1):
+        depth_moves = []
+        completed = True
+        cands2 = cands[:]
+        if prev_m is not None:
+            _bring_front(cands2, prev_m)
+        for _, m in cands2:
+            r, c = divmod(int(m), BOARD_SIZE)
+            b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
+                board, m, player, pending, turn_count, white_turns, config)
+            if loser == player:
+                continue
+            if loser == opp:
+                v = WIN - 1               # 根着法第 1 步即杀
+            elif np.count_nonzero(b2) == PLACE_SIZE:
+                v = 0.0
+            elif pend2 >= 0:
+                v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                            -1e18, 1e18, ctx, ext_budget=1, ply=2)
+            elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
+                               pending % BOARD_SIZE if pending >= 0 else c,
+                               player) >= 4 \
+                    and _loses_to_kill(b2, player, wt2, tc2, config):
+                v = -(WIN - 1)            # 第 1 步即送杀
+            else:
+                v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                             -1e18, 1e18, ctx, ext_budget=1, ply=2)
+            depth_moves.append((int(m), v))
+            if ctx.aborted or (ctx.deadline is not None
+                               and time.perf_counter() > ctx.deadline):
+                completed = False
+                break
+        if not completed or not depth_moves:
+            break
+        depth_moves.sort(key=lambda t: -t[1])
+        moves = depth_moves
+        prev_m = moves[0][0]
+        if progress_cb:
+            progress_cb(moves[:k])
+        if moves[0][1] >= WIN - 1:
+            break                        # 根着法即必杀,无需更深
+        if ctx.deadline is not None and time.perf_counter() > ctx.deadline:
+            break
+    if not moves:
+        moves = [(int(cands[0][1]), 0.0)]  # 兜底:静态分最高(仅极端超时)
+    moves.sort(key=lambda t: -t[1])
+    return (moves[0][1], moves[:k])
 
 
 def play_game(config: GameConfig, rng: np.random.Generator, max_steps: int = 450,

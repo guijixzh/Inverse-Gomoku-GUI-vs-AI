@@ -254,12 +254,18 @@ def test_choose_uses_vcf():
         assert move == forced and mask[move]
 
 
-def test_choose_matches_snapshot_when_vcf_off(monkeypatch):
-    import antifive.tools.heuristic_v3 as h3
+def test_choose_matches_analysis_when_vcf_off(monkeypatch):
+    """VCF 关闭时 choose 不得偏离 analysis 的根评估(噪声带内)。
+
+    引擎候选生成/根窗口/占领步符号已按复盘结论有意修复,不再与 v3
+    快照逐着相等。"""
+    from antifive import heuristic as h
     monkeypatch.setattr(ts, "USE_VCF", False)
     for g in list(_random_games(n_games=2, seed=13))[:2]:
         args = (g.board, g.current_player, g.pending, g.turn_count,
                 g.white_turns, CFG)
+        _, moves = h.analysis_moves(*args, np.random.default_rng(0),
+                                    depth=2, k=6)
+        top_v = moves[0][1]
         m1 = choose_heuristic_move(*args, np.random.default_rng(0), depth=2)
-        m2 = h3.choose_heuristic_move(*args, np.random.default_rng(0), depth=2)
-        assert m1 == m2
+        assert dict(moves).get(int(m1), -1e18) >= top_v - h.O_NOISE - 1e-9
