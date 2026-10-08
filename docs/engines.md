@@ -28,6 +28,14 @@ python -m antifive.gui --model models/best_model.pth
 --heuristic-version new|old --no-vcf`。参数可被 `data/params.json` 复现,
 调优工具见 `src/antifive/tools/param_tune.py`。
 
+开局库:`antifive/openbook_data.py` 由 `tools/openbook_gen.py` 用 KataGo 生成
+(默认 20k visits;黑空盘首手 + 每个 D4 等价类首手的白方应手),运行时按 D4
+对称规范化查表,`ANTIFIVE_NO_BOOK=1` 可关闭。重新生成(需本地 katago):
+
+```bash
+python -m antifive.tools.openbook_gen --visits 20000
+```
+
 对拍(等时强弱回归;`heuristic_v4.py` 为 2026-10-08 搜索一致性修复前的冻结快照):
 
 ```bash

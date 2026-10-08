@@ -258,7 +258,10 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 基础预算 `ANTIFIVE_VCF_BUDGET` 默认 0.05s,有对局限时时按剩余预算的 5% 放宽
 (上限 0.6s,见 `heuristic._vcf_slice`),`ANTIFIVE_VCF=0` 关闭,
 `ANTIFIVE_VCF_DEPTH` 默认 8;桌面与网页的「设定」面板均可切换引擎版本(新版/
-老版)与 VCF 开关,默认**新版 + VCF 开**。搜索基准与新旧对拍:
+老版)与 VCF 开关,默认**新版 + VCF 开**。另有:开局首手走 KataGo 离线开局库
+(`openbook.py` + `openbook_data.py`,D4 对称规范化,包内纯数据、网页可用,
+`ANTIFIVE_NO_BOOK=1` 关闭);根节点对前 3 候选做一次"防守 VCF"校验(从搜索
+预算中预留 ≤0.3s,证明对手强制杀则降为必败分)。搜索基准与新旧对拍:
 
 ```bash
 python -m antifive.tools.heur_bench --depths 4,5,6            # 固定局面池基准
@@ -295,6 +298,8 @@ Inverse-Gomoku-GUI-vs-AI/
 │   ├── network.py              # 策略价值网络(训练失败)
 │   ├── heuristic.py            # 启发式 AI(alpha-beta + 全局评估)
 │   ├── threat_search.py        # 独立强制杀链搜索(VCF,可开关)
+│   ├── openbook.py             # 开局库查表(D4 对称规范化,可开关)
+│   ├── openbook_data.py        # 开局库数据(KataGo 离线生成)
 │   ├── heuristic_versions.py   # 启发式版本调度(新版/老版,VCF 开关)
 │   ├── tactics.py              # 杀棋检测
 │   ├── record.py               # .afg 棋谱读写
@@ -307,7 +312,7 @@ Inverse-Gomoku-GUI-vs-AI/
 ├── web/                        # 网页版(Vite + TypeScript + Canvas + Pyodide)
 ├── scripts/setup_env.py        # 环境自检与依赖自动安装(GPU/CPU 自适应)
 ├── config/                     # engines.json 与 gtp_test.cfg
-├── data/                       # 启发式参数、调参池、示例棋谱
+├── data/                       # 启发式参数、调参/评估局面池、示例棋谱
 ├── models/                     # 权重(说明见 models/README.md)
 ├── docs/                       # 规则、棋谱格式、引擎、训练记录
 ├── tests/                      # pytest 回归测试

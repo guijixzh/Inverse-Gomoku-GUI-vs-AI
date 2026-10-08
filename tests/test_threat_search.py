@@ -244,6 +244,34 @@ def test_find_forced_kill_budget_fallback():
                                node_cap=1) is None
 
 
+def test_defensive_vcf_demotes_proven_loss(monkeypatch):
+    """根候选走完若对手可证明强制杀,该着法降为必败分(防守校验接线)。"""
+    from antifive import heuristic as h
+
+    cfg = GameConfig(loss_start_turns=8, white_restrict_turns=2,
+                     mask_suicide=True)
+    board = np.zeros((15, 15), dtype=np.int8)
+    board[7, 7] = W
+    board[0, 0] = B
+    board[14, 14] = W
+    pending = 7 * 15 + 7                     # 白子刚被占领,轮黑安置
+    args = (board, B, pending, 20, 5, cfg)
+
+    def fake(*a, **k):
+        return stem["v"]
+
+    stem = {"v": None}
+    monkeypatch.setattr(ts, "find_forced_kill", fake)
+    _, moves = h.analysis_moves(*args, np.random.default_rng(0), depth=2,
+                                use_vcf=False)
+    top = moves[0][0]
+    assert dict(moves).get(top, 0.0) > -h.MATE_LIMIT      # 无杀:不降分
+    stem["v"] = 1                                         # 假装对手有杀
+    _, moves2 = h.analysis_moves(*args, np.random.default_rng(0), depth=2,
+                                 use_vcf=False)
+    assert dict(moves2).get(top, 0.0) <= -h.MATE_LIMIT    # 有杀:降为必败
+
+
 def test_vcf_defaults_and_budget_slice():
     """深杀修复:v5.1 默认深度 8/节点 60000;有对局限时时预算按 5% 放宽,
     夹在 [VCF_TIME_CAP, 0.6s]。"""

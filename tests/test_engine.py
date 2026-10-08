@@ -194,6 +194,8 @@ def test_mcts_progress_counter():
 def test_heuristic_progress_callback():
     from antifive.heuristic import choose_heuristic_move
     g = ReverseGomoku()
+    g.make_move(112)                     # 走两手后避开开局库(首手直接查表不搜索)
+    g.make_move(113)
     seen: list = []
     move = choose_heuristic_move(
         g.board, g.current_player, g.pending, g.turn_count, g.white_turns,

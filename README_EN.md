@@ -234,7 +234,16 @@ If the default Python lacks dependencies, run
 | Heuristic AI | numpy | Medium-high | depth 1–8, default 8 + 12s AI clock; new engine (default, VCF optional) / old classic |
 | KataGo (inverse gomoku) | external exe + `.bin` | High | recommended |
 
-See [`models/README.md`](models/README.md) and
+The heuristic AI loads tuned parameters from `data/params.json` (whitelisted
+eval/ordering keys, `ANTIFIVE_NO_PARAMS=1` to disable) and TT size is
+configurable via `ANTIFIVE_TT_BITS`. It enables a proof-based VCF
+(forced-kill-chain) search by default: `ANTIFIVE_VCF_BUDGET` default 0.05s,
+widened to 5% of the move budget (capped at 0.6s) when a clock is used,
+`ANTIFIVE_VCF=0` to disable, `ANTIFIVE_VCF_DEPTH` default 8. It also uses a
+KataGo-generated opening book for the first move (`openbook.py` +
+`openbook_data.py`, D4-symmetry lookup, `ANTIFIVE_NO_BOOK=1` to disable) and a
+bounded root "defensive VCF" check (top-3 candidates, <=0.3s reserved from the
+search budget). See [`models/README.md`](models/README.md) and
 [`docs/engines.md`](docs/engines.md) (Chinese).
 
 ## Record Format

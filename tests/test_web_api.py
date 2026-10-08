@@ -81,6 +81,8 @@ def test_white_capture_restriction():
 
 def test_ai_moves_and_progress():
     _call(cmd="new")
+    _call(cmd="move", idx=112)           # 走两手避开开局库(首手直接查表不搜索)
+    _call(cmd="move", idx=113)
     seen: list = []
     web_api.set_progress_cb(lambda n: seen.append(int(n)))
     try:
@@ -89,7 +91,7 @@ def test_ai_moves_and_progress():
         web_api.set_progress_cb(None)
     st = resp["state"]
     assert resp["move"] is not None and st["board"][resp["move"]] != 0
-    assert st["move_count"] == 1
+    assert st["move_count"] == 3
     assert resp["nodes"] > 0 and seen
 
 

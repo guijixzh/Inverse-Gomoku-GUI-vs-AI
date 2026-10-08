@@ -11,6 +11,13 @@ v5(2026-10-08,基于 KataGo 自对弈复盘归因的修复):
 - 置换表在子节点被强制扩展时按 depth-1 保守存表,避免其他路径按标称深度
   复用到被抬高的分值。
 
+v5.2(2026-10-08,低风险增强:开局库 + 防守 VCF):
+- 开局库 openbook:首手(黑空盘/白应黑首手)用 KataGo 20k visits 离线结论,
+  D4 对称规范化查表;包内纯数据模块,网页端可用,未命中自动回退搜索;
+- 根节点防守校验:对最终排序前 3 的着法,走出且轮到对手时用 VCF 尝试证明
+  对手存在强制杀;证明成功则该着降为必败分。预算从主搜索时间中预留
+  (2.5%,夹在 [0.02s, 0.3s]),结论保守不误伤。
+
 v5.1(2026-10-08,VCF 深杀修复):
 - VCF 默认深度 6→8、节点上限 20000→60000;有对局限时时预算按剩余时间的
   5% 放宽(夹在 [0.05s, 0.6s],见 _vcf_slice)。复盘:用户局 step75 的白
@@ -70,6 +77,7 @@ from .reversegomoku import (
     MOVE_DISTS, PLACE_SIZE, RAYS, ReverseGomoku, WHITE, danger_map_for,
     fwd_run_lengths,
 )
+from . import openbook
 from . import threat_search
 from .tactics import (
     jump_through as _jump_through, kill_captures, kill_placements, kill_samples,
@@ -1041,6 +1049,57 @@ def _vcf_slice(time_budget: float | None) -> float:
     return min(0.6, max(base, 0.05 * time_budget))
 
 
+def _defensive_vcf_slice(time_budget: float | None) -> float:
+    """单步"防守 VCF"总预算(校验根候选走完后对手是否有强制杀)。
+
+    有对局限时时取剩余时间的 2.5%,夹在 [0.02s, 0.3s];不限时 0.05s。
+    从主搜索预算中预留(见 _root_iterative),不额外超时。"""
+    if not time_budget:
+        return 0.05
+    return min(0.3, max(0.02, 0.025 * time_budget))
+
+
+def _filter_defensive_kills(ranked, board, player, pending, turn_count,
+                            white_turns, config, total_budget: float,
+                            top_n: int = 3):
+    """把"走完轮到对手、对手可证明强制杀"的根着法降为必败分。
+
+    VCF 结论保守(找不到 ≠ 安全),只用于避免确定性送杀;已有我方确定杀着
+    (|v| ≥ MATE_LIMIT)不再检查。total_budget 为本次校验的总预算(秒),
+    平分给前 top_n 个候选。"""
+    if not ranked or turn_count < config.loss_start_turns:
+        return ranked
+    if ranked[0][1] >= MATE_LIMIT:
+        return ranked                       # 己方已证必胜
+    opp = _other(player)
+    if opp == WHITE and white_turns < config.white_restrict_turns:
+        return ranked                       # 对手(白)禁移期不可能有杀
+    share = total_budget / max(top_n, 1)
+    changed = False
+    for i in range(min(top_n, len(ranked))):
+        m, v = ranked[i]
+        if abs(v) >= MATE_LIMIT:
+            continue
+        b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
+            board, m, player, pending, turn_count, white_turns, config)
+        if loser != 0 or pend2 >= 0:
+            continue                        # 自杀/反杀/占领后仍是我方行棋
+        if tc2 < config.loss_start_turns:
+            continue
+        deadline = time.perf_counter() + share
+        mv = threat_search.find_forced_kill(
+            b2, opp, -1, tc2, wt2, config,
+            max_depth=threat_search.VCF_MAX_DEPTH,
+            deadline=deadline,
+            node_cap=max(2000, threat_search.VCF_NODE_CAP // 4))
+        if mv is not None:
+            ranked[i] = (m, -(WIN - 1))     # 对手有强制杀:确定性送杀
+            changed = True
+    if changed:
+        ranked = sorted(ranked, key=lambda t: -t[1])
+    return ranked
+
+
 def _root_iterative(board, player, pending, turn_count, white_turns, config,
                     rng, depth, time_budget, k, node_cb=None, report_cb=None,
                     tt=None, noise: float = 0.0):
@@ -1053,6 +1112,12 @@ def _root_iterative(board, player, pending, turn_count, white_turns, config,
     返回 (ranked, ok):ranked = 最后一次完整深度的 [(着法, 价值)] 降序;
     无任何合法着法时 ok=False(调用方决定返回 None 还是空列表)。"""
     opp = _other(player)
+    book_move = openbook.lookup(board, player, pending)
+    if book_move is not None:
+        mask = ReverseGomoku.legal_mask_for(board, player, pending,
+                                            white_turns, config, turn_count)
+        if mask[book_move]:
+            return [(int(book_move), 0.0)], True
     cands = _candidates(board, player, pending, turn_count, white_turns,
                         config, ROOT_K, diversity=True)
     if not cands:
@@ -1065,8 +1130,16 @@ def _root_iterative(board, player, pending, turn_count, white_turns, config,
         if not legal_all.size:
             return [], False
         cands = [(0.0, int(m)) for m in legal_all]
+    # 预留"防守 VCF"预算:主搜索提前 dvcf 秒收手,校验对手是否有强制杀,
+    # 总用时仍受 time_budget 约束(见 _filter_defensive_kills)
+    dvcf = (_defensive_vcf_slice(time_budget)
+            if turn_count >= config.loss_start_turns else 0.0)
+    search_budget = time_budget
+    if time_budget and dvcf > 0:
+        search_budget = max(0.02, time_budget - dvcf)
     ctx = _SearchCtx(tt if tt is not None else _TT(),
-                     time.perf_counter() + time_budget if time_budget else None)
+                     time.perf_counter() + search_budget if search_budget
+                     else None)
     ctx.cb = node_cb
     prev_m = None
     ranked = []
@@ -1121,6 +1194,9 @@ def _root_iterative(board, player, pending, turn_count, white_turns, config,
             break
     if not ranked:
         ranked = [(int(cands[0][1]), 0.0)]  # 兜底:静态分最高(仅极端超时)
+    if dvcf > 0:
+        ranked = _filter_defensive_kills(ranked, board, player, pending,
+                                         turn_count, white_turns, config, dvcf)
     return ranked, True
 
 
