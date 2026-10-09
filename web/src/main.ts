@@ -1,4 +1,5 @@
 import { App } from "./app";
+import { PYODIDE_VERSION } from "./version";
 import "./style.css";
 
 declare global {
@@ -11,6 +12,6 @@ window.__antifive = new App(import.meta.env.BASE_URL);
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   navigator.serviceWorker
-    .register(`${import.meta.env.BASE_URL}sw.js`)
+    .register(`${import.meta.env.BASE_URL}sw.js?v=${PYODIDE_VERSION}`)
     .catch(() => undefined);
 }

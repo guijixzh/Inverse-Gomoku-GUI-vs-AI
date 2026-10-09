@@ -89,7 +89,7 @@ class _Ctx:
 
 def _tick(ctx: _Ctx) -> None:
     ctx.nodes += 1
-    if ctx.cb is not None and (ctx.nodes & 2047) == 0:
+    if ctx.cb is not None and (ctx.nodes & 255) == 0:
         ctx.cb(ctx.nodes)
     if ctx.node_cap and ctx.nodes >= ctx.node_cap:
         ctx.aborted = True                       # 节点上限每步检查

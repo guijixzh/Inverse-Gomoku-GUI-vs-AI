@@ -1067,7 +1067,7 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
     输方取 -(WIN - ply)(越慢越大)——必败时自动选最长抵抗、必胜时自动选最快杀。
     超时置 ctx.aborted 并返回近似值(近似值不写置换表,根节点丢弃该深度)。"""
     ctx.nodes += 1
-    if ctx.cb is not None and (ctx.nodes & 2047) == 0:
+    if ctx.cb is not None and (ctx.nodes & 255) == 0:
         ctx.cb(ctx.nodes)
     if depth <= 0:
         # 叶节点先做战术终局检测:行棋方握有一步/两步杀则直接必胜,

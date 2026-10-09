@@ -83,12 +83,21 @@ export class BoardCanvas {
   private ctx: CanvasRenderingContext2D;
   private bg: HTMLCanvasElement | null = null;
   private scale = 1;
+  private dpr = 0;
+
+  onRestored: (() => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("canvas 2d context 不可用");
     this.ctx = ctx;
+    canvas.addEventListener("contextlost", (event) => event.preventDefault());
+    canvas.addEventListener("contextrestored", () => {
+      this.bg = null;
+      this.resize();
+      this.onRestored?.();
+    });
     this.resize();
   }
 
@@ -98,16 +107,24 @@ export class BoardCanvas {
     const size = Math.max(240, Math.floor(Math.min(parent.clientWidth, window.innerHeight * 0.82)));
     const dpr = window.devicePixelRatio || 1;
     const backing = Math.round(size * dpr);
-    const changed = this.canvas.width !== backing || this.canvas.height !== backing;
+    const changed = this.canvas.width !== backing || this.canvas.height !== backing
+      || this.dpr !== dpr || this.bg === null;
     this.canvas.style.width = `${size}px`;
     this.canvas.style.height = `${size}px`;
     if (changed) {
       this.canvas.width = backing;
       this.canvas.height = backing;
       this.scale = size / BOARD_PX;
+      this.dpr = dpr;
       this.bg = this.buildBackground(backing, this.scale * dpr);
     }
     return changed;
+  }
+
+  checkDpr(): boolean {
+    const dpr = window.devicePixelRatio || 1;
+    if (dpr === this.dpr) return false;
+    return this.resize();
   }
 
   get pixelSize(): number {

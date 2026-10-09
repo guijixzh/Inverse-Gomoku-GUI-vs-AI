@@ -459,6 +459,10 @@ button.active {
   color: var(--muted);
 }
 
+#loading-retry {
+  margin-top: 4px;
+}
+
 @media (max-width: 920px) {
   #app {
     flex-direction: column;

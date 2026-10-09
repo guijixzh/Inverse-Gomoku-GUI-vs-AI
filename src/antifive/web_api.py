@@ -3,7 +3,7 @@
 Web Worker 中的 JS 侧只做两件事:
 
     mod = pyodide.pyimport("antifive.web_api")
-    mod.set_progress_cb(fn)                  # 可选:AI 搜索节点数回调(每 2048 节点)
+    mod.set_progress_cb(fn)                  # 可选:AI 搜索节点数回调(每 256 节点)
     resp = mod.handle(request_json)          # 同步调用,返回 JSON 字符串
 
 请求/响应均为 JSON 字符串,所有状态保存在模块级单例(一个 worker 一局会话)。
@@ -72,6 +72,7 @@ class _Session:
         self.last_nodes = 0
         self.last_elapsed = 0.0
         self.tt = _TT()                 # 跨步复用置换表(网页可用 ANTIFIVE_TT_BITS 调小)
+        self.last_engine = hv.VERSION_ADVANCED   # 置换表按引擎版本隔离(见 _tt_for)
 
     def progress(self, nodes: int) -> None:
         self.last_nodes = int(nodes)
@@ -79,6 +80,15 @@ class _Session:
 
 
 _SESSION = _Session()
+
+
+def _tt_for(sess: _Session, engine: str):
+    """置换表按引擎版本隔离:版本切换时重建,避免不同评估语义(蒸馏与否)
+    的缓存值互相污染导致着法质量下降。"""
+    if engine != sess.last_engine:
+        sess.last_engine = engine
+        sess.tt = _TT()
+    return sess.tt
 
 
 def _config_from(raw) -> GameConfig:
@@ -177,6 +187,7 @@ def _finish_stuck(sess: _Session) -> bool:
 def _cmd_new(sess: _Session, req: dict) -> dict:
     cfg = _config_from(req.get("config"))
     sess.game = ReverseGomoku(cfg)
+    sess.tt = _TT()                      # 新局清空置换表,避免跨局残留
     sess.last_nodes = 0
     sess.last_elapsed = 0.0
     return {"state": _state(sess)}
@@ -236,7 +247,7 @@ def _cmd_ai(sess: _Session, req: dict) -> dict:
                      g.turn_count, g.white_turns, g.config, sess.rng,
                      depth=depth, time_budget=budget,
                      progress_cb=sess.progress,
-                     tt=sess.tt if extra else None,
+                     tt=_tt_for(sess, engine) if extra else None,
                      use_vcf=use_vcf if extra else None)
     sess.last_elapsed = time.perf_counter() - t0
     if move is None:
@@ -279,7 +290,7 @@ def _cmd_hint(sess: _Session, req: dict) -> dict:
     pos_v, moves = hv.analysis(
         engine, g.board, g.current_player, g.pending, g.turn_count,
         g.white_turns, g.config, sess.rng, depth=depth, time_budget=budget,
-        k=5, tt=sess.tt if extra else None,
+        k=5, tt=_tt_for(sess, engine) if extra else None,
         use_vcf=use_vcf if extra else None)
     return {"pos_v": float(pos_v),
             "moves": [{"idx": int(m), "v": float(v)} for m, v in moves]}
@@ -319,6 +330,7 @@ def _cmd_import(sess: _Session, req: dict) -> dict:
         if loser:
             g.resign(loser)
     sess.game = g
+    sess.tt = _TT()
     sess.last_nodes = 0
     sess.last_elapsed = 0.0
     return {"state": _state(sess), "result": rec.result}
@@ -347,6 +359,7 @@ def _cmd_goto(sess: _Session, req: dict) -> dict:
         if loser and not g.game_over:
             g.resign(loser)                # 认输局末手:按原谱结果恢复终局
     sess.game = g
+    sess.tt = _TT()
     sess.last_nodes = 0
     sess.last_elapsed = 0.0
     return {"state": _state(sess), "pos": pos}

@@ -5,16 +5,22 @@ type PendingCall = {
   reject: (error: Error) => void;
 };
 
+const DEFAULT_CALL_TIMEOUT_MS = 300_000;
+
 export class Engine {
   private worker: Worker;
   private nextId = 1;
   private pending = new Map<number, PendingCall>();
   private readyResolve!: () => void;
   private readyReject!: (error: Error) => void;
+  private settled = false;
+  private dead = false;
 
   readonly ready: Promise<void>;
   onProgress: ((nodes: number) => void) | null = null;
   onStatus: ((status: EngineStatus) => void) | null = null;
+  onDownload: ((stage: string, loaded: number, total: number) => void) | null = null;
+  onFatal: ((error: Error) => void) | null = null;
 
   constructor(base: string) {
     this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -25,11 +31,14 @@ export class Engine {
     this.worker.onmessage = (event: MessageEvent) => {
       const msg = event.data;
       if (msg.type === "ready") {
+        this.settled = true;
         this.readyResolve();
       } else if (msg.type === "status") {
         this.onStatus?.(msg.status);
       } else if (msg.type === "progress") {
         this.onProgress?.(msg.nodes);
+      } else if (msg.type === "download") {
+        this.onDownload?.(msg.stage, msg.loaded, msg.total);
       } else if (msg.type === "result") {
         const entry = this.pending.get(msg.id);
         if (!entry) return;
@@ -37,16 +46,56 @@ export class Engine {
         if (msg.ok) entry.resolve(msg.value);
         else entry.reject(new Error(msg.error));
       } else if (msg.type === "fatal") {
-        this.readyReject(new Error(msg.error));
+        this.fail(new Error(msg.error));
       }
+    };
+    this.worker.onerror = (event: ErrorEvent) => {
+      event.preventDefault?.();
+      this.fail(new Error(event.message || "引擎 Worker 加载失败(资源可能已更新,请刷新页面)"));
+    };
+    this.worker.onmessageerror = () => {
+      this.fail(new Error("引擎 Worker 消息解码失败"));
     };
     this.worker.postMessage({ type: "init", base });
   }
 
-  call<T>(cmd: string, payload: Record<string, unknown> = {}): Promise<T> {
+  private fail(error: Error) {
+    if (this.dead) return;
+    this.dead = true;
+    if (!this.settled) {
+      this.settled = true;
+      this.readyReject(error);
+    } else {
+      this.onFatal?.(error);
+    }
+    for (const entry of this.pending.values()) entry.reject(error);
+    this.pending.clear();
+  }
+
+  call<T>(
+    cmd: string,
+    payload: Record<string, unknown> = {},
+    timeoutMs = DEFAULT_CALL_TIMEOUT_MS,
+  ): Promise<T> {
+    if (this.dead) return Promise.reject(new Error("引擎已停止"));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+      const timer = timeoutMs > 0
+        ? setTimeout(() => {
+            this.pending.delete(id);
+            reject(new Error(`引擎调用超时: ${cmd}`));
+          }, timeoutMs)
+        : null;
+      this.pending.set(id, {
+        resolve: (value) => {
+          if (timer !== null) clearTimeout(timer);
+          resolve(value as T);
+        },
+        reject: (error) => {
+          if (timer !== null) clearTimeout(timer);
+          reject(error);
+        },
+      });
       this.worker.postMessage({ type: "call", id, cmd, payload });
     });
   }

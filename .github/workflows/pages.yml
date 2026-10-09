@@ -39,6 +39,7 @@ jobs:
         working-directory: web
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
+          ANTIFIVE_FORCE_WHEEL: "1"
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -71,6 +71,14 @@ export class App {
   private hover: { r: number; c: number } | null = null;
   private pointer: { x: number; y: number } | null = null;
 
+  private hiddenSince: number | null = null;
+  private hiddenDuringThink = 0;
+  private hiddenProgress = 0;
+  private suspendedDuringThink = false;
+  private aiRedoArmed = false;
+  private aiRedoEpoch = 0;
+  private dprCheckedAt = 0;
+
   private review = false;
   private recordMoves: number[] = [];
   private variation: number[] = [];
@@ -84,6 +92,9 @@ export class App {
 
   constructor(base: string) {
     this.board = new BoardCanvas($("board") as HTMLCanvasElement);
+    this.board.onRestored = () => {
+      this.needsDraw = true;
+    };
     this.timeline = $("timeline") as HTMLCanvasElement;
     const tctx = this.timeline.getContext("2d");
     if (!tctx) throw new Error("timeline 2d context 不可用");
@@ -103,16 +114,35 @@ export class App {
     };
     this.engine.onProgress = (nodes) => {
       this.nodes = nodes;
+      this.hiddenProgress++;   // 进度心跳:切屏期间是否仍有消息 = Worker 是否被系统挂起
+    };
+    this.engine.onDownload = (stage, loaded, total) => {
+      const mb = (n: number) => (n / 1048576).toFixed(1);
+      $("loading-detail").textContent = `${stage} ${mb(loaded)} / ${mb(total)} MB`;
+    };
+    this.engine.onFatal = (error) => {
+      $("loading-text").textContent = "引擎已停止";
+      $("loading-detail").textContent = `${errText(error)}(请刷新页面重试)`;
+      $("loading").classList.remove("hidden");
+      this.showReloadButton();
     };
     this.engine.ready
       .then(() => {
         this.ready = true;
         $("loading").classList.add("hidden");
+        const nav = navigator as Navigator & { deviceMemory?: number };
+        this.logDiag("ready", {
+          ua: navigator.userAgent,
+          cores: navigator.hardwareConcurrency,
+          memoryGB: nav.deviceMemory,
+          dpr: window.devicePixelRatio,
+        });
         this.newGame();
       })
       .catch((error) => {
         $("loading-text").textContent = "引擎加载失败";
         $("loading-detail").textContent = errText(error);
+        this.showReloadButton();
       });
     window.requestAnimationFrame(this.tick);
     window.setInterval(() => this.updateClock(), 100);
@@ -307,6 +337,40 @@ export class App {
     window.addEventListener("resize", () => {
       if (this.board.resize()) this.needsDraw = true;
     });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        this.hiddenSince = performance.now();
+        this.hiddenProgress = 0;
+        return;
+      }
+      if (this.hiddenSince !== null) {
+        const hiddenMs = performance.now() - this.hiddenSince;
+        if (this.thinking) {
+          this.hiddenDuringThink += hiddenMs;
+          // 挂起判定:隐藏超过 2s 且期间一条搜索进度都没有(Worker 被冻结),
+          // 时间预算会被挂起时长空烧,结果只是浅层搜索
+          if (hiddenMs > 2000 && this.hiddenProgress === 0) this.suspendedDuringThink = true;
+        }
+        this.hiddenSince = null;
+      }
+      // 切屏/锁屏后 canvas 后备存储可能被系统回收,回到前台强制重建重绘
+      this.board.resize();
+      this.needsDraw = true;
+      if (this.aiRedoArmed) {
+        this.aiRedoArmed = false;
+        if (this.epoch === this.aiRedoEpoch && !this.thinking && !this.review
+            && this.state && !this.state.game_over) {
+          this.maybeRunAi();
+        }
+      } else {
+        this.maybeRunAi();
+      }
+    });
+    window.addEventListener("pageshow", () => {
+      // bfcache 恢复时画面可能整体失效,同样强制重绘
+      this.board.resize();
+      this.needsDraw = true;
+    });
     window.addEventListener("keydown", (event) => this.onKey(event));
     const file = $("file-input") as HTMLInputElement;
     file.addEventListener("change", () => {
@@ -402,10 +466,11 @@ export class App {
   private maybeRunAi() {
     if (!this.ready || this.review || !this.state || this.state.game_over) return;
     if (!this.isAiTurn() || this.thinking) return;
+    if (document.hidden) return;   // 切屏时先不启动,回到前台再思考(避免预算被挂起空烧)
     void this.runAi();
   }
 
-  private async runAi() {
+  private async runAi(retry = 0) {
     const epoch = this.epoch;
     const tier = TIERS[this.tier];
     const budget = this.limitMode === "ai" ? this.limitSeconds : tier.budget;
@@ -413,17 +478,41 @@ export class App {
     if (!prev) return;
     this.thinking = true;
     this.nodes = 0;
+    this.hiddenDuringThink = 0;
+    this.suspendedDuringThink = false;
     this.deadline = this.limitMode === "ai" ? performance.now() + budget * 1000 : null;
     this.syncPanel();
+    let degraded = false;
     try {
-      const res = await this.engine.call<AiResult>("ai", {
-        depth: tier.depth,
-        budget,
-        engine: this.hver,
-        vcf: this.hvcf,
-      });
+      const res = await this.engine.call<AiResult>(
+        "ai",
+        { depth: tier.depth, budget, engine: this.hver, vcf: this.hvcf },
+        Math.round((budget + 120) * 1000),
+      );
       if (epoch !== this.epoch) return;
-      this.applyMove(prev, res.state, res.move);
+      // 切屏/锁屏期间 Worker 被系统挂起(搜索心跳中断):时间预算被空烧,
+      // 结果只是浅层搜索,悔掉后在前台用完整预算重搜一次
+      if (retry === 0 && this.suspendedDuringThink) {
+        degraded = true;
+        this.logDiag("ai degraded by suspend, redo", {
+          budget,
+          elapsed: Number(res.elapsed.toFixed(2)),
+          hiddenMs: Math.round(this.hiddenDuringThink),
+          nodes: res.nodes,
+        });
+        const undoRes = await this.engine.call<{ state: GameState }>("undo", {});
+        if (epoch !== this.epoch) return;
+        this.state = undoRes.state;
+        this.needsDraw = true;
+      } else {
+        this.applyMove(prev, res.state, res.move);
+        this.logDiag("ai move", {
+          move: res.move,
+          nodes: res.nodes,
+          elapsed: Number(res.elapsed.toFixed(2)),
+          hiddenMs: Math.round(this.hiddenDuringThink),
+        });
+      }
     } catch (error) {
       if (epoch === this.epoch) this.setStatus(`AI 出错: ${errText(error)}`);
     } finally {
@@ -434,6 +523,15 @@ export class App {
       }
     }
     if (epoch !== this.epoch) return;
+    if (degraded) {
+      if (document.hidden) {
+        this.aiRedoArmed = true;
+        this.aiRedoEpoch = epoch;
+        return;
+      }
+      await this.runAi(retry + 1);
+      return;
+    }
     if (this.mode === 3 && this.state && !this.state.game_over && !this.review) {
       window.setTimeout(() => this.maybeRunAi(), 350);
     } else {
@@ -729,6 +827,19 @@ export class App {
     this.syncPanel();
   }
 
+  private logDiag(message: string, data?: Record<string, unknown>) {
+    console.info(`[antifive] ${message}`, data ?? "");
+  }
+
+  private showReloadButton() {
+    if (document.getElementById("loading-retry")) return;
+    const btn = document.createElement("button");
+    btn.id = "loading-retry";
+    btn.textContent = "重试 / 刷新";
+    btn.addEventListener("click", () => window.location.reload());
+    $("loading").appendChild(btn);
+  }
+
   private syncPanel() {
     for (const btn of document.querySelectorAll<HTMLButtonElement>("#buttons button")) {
       const action = btn.dataset.action;
@@ -841,6 +952,11 @@ export class App {
 
   private tick = () => {
     const now = performance.now();
+    if (now - this.dprCheckedAt > 1000) {
+      this.dprCheckedAt = now;
+      // 跨不同缩放的显示器拖动窗口时 devicePixelRatio 会变化,但可能不触发 resize
+      if (this.board.checkDpr()) this.needsDraw = true;
+    }
     if (this.arrow && this.arrow.t0 !== null) {
       if (now - this.arrow.t0 < 500) this.needsDraw = true;
       else {

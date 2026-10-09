@@ -719,7 +719,7 @@ def _search(board: np.ndarray, player: int, pending: int, turn_count: int,
     输方取 -(WIN - ply)(越慢越大)——必败时自动选最长抵抗、必胜时自动选最快杀。
     超时置 ctx.aborted 并返回近似值(近似值不写置换表,根节点丢弃该深度)。"""
     ctx.nodes += 1
-    if ctx.cb is not None and (ctx.nodes & 2047) == 0:
+    if ctx.cb is not None and (ctx.nodes & 255) == 0:
         ctx.cb(ctx.nodes)
     if depth <= 0:
         return evaluate(board, player, pending, turn_count, white_turns, config)

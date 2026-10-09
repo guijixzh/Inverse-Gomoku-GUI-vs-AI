@@ -54,7 +54,8 @@ if (process.env.ANTIFIVE_SKIP_WHEEL !== "1") {
     }
     return latest;
   };
-  const stale = !fs.existsSync(wheelDst) || fs.statSync(wheelDst).mtimeMs < newest(srcDir);
+  const stale = process.env.ANTIFIVE_FORCE_WHEEL === "1"
+    || !fs.existsSync(wheelDst) || fs.statSync(wheelDst).mtimeMs < newest(srcDir);
   if (stale) {
     const python = process.env.ANTIFIVE_PYTHON ?? "python";
     const tmp = path.join(webRoot, ".wheel-tmp");

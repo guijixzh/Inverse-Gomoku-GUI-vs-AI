@@ -103,6 +103,28 @@ await wait(() => document.getElementById("loading").classList.contains("hidden")
 await wait(() => window.__antifive?.state, 60000, 50);
 check(true, "engine ready");
 
+const visibilityRedraw = await page.evaluate(() => {
+  const setHidden = (value) => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => value });
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => (value ? "hidden" : "visible"),
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  window.__antifive.needsDraw = false;
+  setHidden(true);
+  setHidden(false);
+  const redrawn = window.__antifive.needsDraw === true;
+  delete document.hidden;
+  delete document.visibilityState;
+  return redrawn;
+});
+check(visibilityRedraw, "visibilitychange redraws board");
+
+await wait(async () => (await navigator.serviceWorker.getRegistrations()).length > 0, 15000, 200);
+check(true, "service worker registered");
+
 const initial = await page.evaluate(() => ({
   player: window.__antifive.state.player,
   count: window.__antifive.state.move_count,
