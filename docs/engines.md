@@ -22,11 +22,18 @@ python -m antifive.gui --model models/best_model.pth
 
 ## 启发式 AI
 
-内置算法,无需额外文件;GUI 中可选深度 1–8(默认 8 + AI 读秒 12 秒),并可切换
-引擎版本(新版强化 / 老版经典)与 VCF 强制杀链开关(默认新版 + VCF 开),命令行行为
-`--engine heuristic --heuristic-depth N --limit none|ai --ai-time S
---heuristic-version new|old --no-vcf`。参数可被 `data/params.json` 复现,
-调优工具见 `src/antifive/tools/param_tune.py`。
+内置算法,无需额外文件;GUI 中可选深度 1–8(默认 8 + AI 读秒 12 秒,三档通用),
+并可切换三档引擎版本与 VCF 强制杀链开关(初级无 VCF;默认高级 + VCF 开):
+
+| 版本 | 实现 | 组成 | 等时对拍(96 局) |
+|---|---|---|---|
+| 初级 | `tools/heuristic_v2.py` 冻结经典版 | 老算法,无 VCF/开局库/蒸馏 | 对中级 12:84(12%) |
+| 中级 | `tools/heuristic_v5.py` 冻结快照 | 搜索一致性修复 + VCF v5.1 + 开局库 + 防守 VCF | 对初级 84:12(88%);对高级 17:79(18%) |
+| 高级(默认) | `antifive.heuristic` | 中级 + KataGo 蒸馏价值校正 | 对中级 79:17(82%);对初级 94:2(98%) |
+
+命令行行为 `--engine heuristic --heuristic-depth N --limit none|ai --ai-time S
+--heuristic-version beginner|mid|advanced --no-vcf`(兼容旧值 old/new)。
+参数可被 `data/params.json` 复现,调优工具见 `src/antifive/tools/param_tune.py`。
 
 开局库:`antifive/openbook_data.py` 由 `tools/openbook_gen.py` 用 KataGo 生成
 (默认 20k visits;黑空盘首手 + 每个 D4 等价类首手的白方应手),运行时按 D4
@@ -36,11 +43,34 @@ python -m antifive.gui --model models/best_model.pth
 python -m antifive.tools.openbook_gen --visits 20000
 ```
 
-对拍(等时强弱回归;`heuristic_v4.py` 为 2026-10-08 搜索一致性修复前的冻结快照):
+### KataGo 蒸馏(策略先验 + 价值校正)
+
+`antifive/distill_data.py` 由 `tools/build_distill_data.py`(并行采样局面并用
+KataGo 20k visits 标注 top-20 候选分布,可断点续跑)与 `tools/train_distill.py`
+(列表式 softmax 策略先验 + 价值线性回归)生成:
 
 ```bash
-python -m antifive.tools.match_ai --games 40 --depth 8 --budget 1 --workers 8 \
-    --old-module antifive.tools.heuristic_v4
+python -m antifive.tools.build_distill_data --workers 4 --visits 20000 \
+    --games-selfplay 200 --games-katago 12 --minutes 22   # 分块运行,续跑
+python -m antifive.tools.train_distill --pool checkpoints/distill_pool.npz
+```
+
+运行时:**价值校正默认开启**(`evaluate` 混入,权重 `ANTIFIVE_VALUE_W` 默认
+0.5,`ANTIFIVE_NO_DISTILL=1` 关闭);策略先验默认关闭(`ANTIFIVE_PRIOR_W`
+默认 0,设为正数开启)。等时对拍:价值校正 vs 修复前 144 局 129:15(89.6%,
+两个时限),策略先验单独启用 96 局 47:49(49%,故默认关闭)。
+
+对拍(等时强弱回归;冻结快照:`heuristic_v2`=初级、`heuristic_v5`=中级、
+`heuristic_v4`=搜索一致性修复前的旧快照):
+
+```bash
+# 三档两两对照(高级 vs 中级)
+python -m antifive.tools.match_ai --games 48 --depth 8 --budget 1 --workers 8 \
+    --new-module antifive.heuristic --old-module antifive.tools.heuristic_v5
+# 中级 vs 初级
+python -m antifive.tools.match_ai --games 48 --depth 8 --budget 1 --workers 8 \
+    --new-module antifive.tools.heuristic_v5 \
+    --old-module antifive.tools.heuristic_v2
 ```
 
 ## KataGo(逆五规则)

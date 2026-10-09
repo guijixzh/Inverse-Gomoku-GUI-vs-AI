@@ -1,4 +1,9 @@
-"""启发式小 AI(强化版):极小化搜索 + 全局局面评估 + 选择性候选着法
+"""启发式小 AI(冻结快照 v5:中级引擎)
+
+本文件是 8cd8bcf 的完整快照(搜索一致性修复 + VCF v5.1 深杀 + 开局库 +
+防守 VCF),作为 GUI「中级」引擎与等时对拍基线;相对当前 antifive.heuristic
+(高级,含 KataGo 蒸馏价值校正)缺少蒸馏。
+
 
 v5(2026-10-08,基于 KataGo 自对弈复盘归因的修复):
 - 修复 choose 根搜索两处错误:①占领步后同一方继续安置,子节点视角与根
@@ -70,17 +75,16 @@ from pathlib import Path
 
 import numpy as np
 
-from . import record as record_mod
-from .paths import data_dir
-from .reversegomoku import (
+from .. import record as record_mod
+from ..paths import data_dir
+from ..reversegomoku import (
     BLACK, BOARD_SIZE, DIRECTIONS, EMPTY, GameConfig, LINE_IDX, MOVE_DIRS,
     MOVE_DISTS, PLACE_SIZE, RAYS, ReverseGomoku, WHITE, danger_map_for,
     fwd_run_lengths,
 )
-from . import distill
-from . import openbook
-from . import threat_search
-from .tactics import (
+from .. import openbook
+from .. import threat_search
+from ..tactics import (
     jump_through as _jump_through, kill_captures, kill_placements, kill_samples,
 )
 
@@ -664,11 +668,6 @@ def evaluate(board: np.ndarray, player: int, pending: int, turn_count: int,
             and kill_placements(board, player, pending, turn_count,
                                 white_turns, config).size:
         s += E_PENDING_KILL
-    if distill.ENABLED:
-        # KataGo 蒸馏价值校正(未训练/未启用时返回 0,不改变行为)
-        s += distill.value_score(_value_features(
-            player, m_black, m_white, danger_cnt, danger_mine, empty,
-            adj_b, adj_w, cl_b, cl_w, ct_b, ct_w))
     return s
 
 
@@ -686,128 +685,13 @@ def _place_targets(board: np.ndarray, c: int) -> list:
     return out
 
 
-_PRIOR_DIM = 14          # 蒸馏策略先验标量特征维数(与 distill_data 对齐)
-_VALUE_DIM = 20          # 蒸馏价值校正特征维数
-
-
-def _prior_features(board: np.ndarray, player: int, pending: int,
-                    turn_count: int, white_turns: int, config: GameConfig,
-                    moves) -> tuple:
-    """蒸馏先验特征(与 tools/train_distill.py 同一实现,保证训练/推理一致)。
-
-    返回 (scalars (M,_PRIOR_DIM) float64, tokens (M,8) uint8)。"""
-    mv = np.asarray(moves, dtype=np.int64)
-    flat = board.reshape(-1)
-    opp = _other(player)
-    lt_b, lt_w, nb_b, nb_w = _line_maps_combo(board)
-    lt_self_f = (lt_b if player == BLACK else lt_w).reshape(-1)
-    lt_opp_f = (lt_w if player == BLACK else lt_b).reshape(-1)
-    nb_self_f = (nb_b if player == BLACK else nb_w).reshape(-1)
-    nb_opp_f = (nb_w if player == BLACK else nb_b).reshape(-1)
-    ends, route = _threats(board, player, white_turns, turn_count, config)
-    if pending >= 0:
-        kill_cells = {int(x) for x in kill_placements(
-            board, player, pending, turn_count, white_turns, config)}
-    else:
-        kill_cells = {int(c) for c, _ in kill_captures(
-            board, player, pending, turn_count, white_turns, config)}
-    open_dirs = np.zeros(len(mv), dtype=np.float64)
-    for dr, dc in DIRECTIONS:
-        rr = mv // BOARD_SIZE + dr
-        cc = mv % BOARD_SIZE + dc
-        ok = (rr >= 0) & (rr < BOARD_SIZE) & (cc >= 0) & (cc < BOARD_SIZE)
-        idx = np.where(ok, rr * BOARD_SIZE + cc, 0)
-        open_dirs += ((flat[idx] == EMPTY) & ok)
-    jumps_self = np.empty(len(mv), dtype=np.float64)
-    jumps_opp = np.empty(len(mv), dtype=np.float64)
-    for i, m in enumerate(mv):
-        r, c = divmod(int(m), BOARD_SIZE)
-        jumps_self[i] = _jump_through(board, r, c, player)
-        jumps_opp[i] = _jump_through(board, r, c, opp)
-    ends_arr = np.fromiter(ends, dtype=np.int64, count=len(ends))
-    route_arr = np.fromiter(route, dtype=np.int64, count=len(route))
-    kill_arr = np.fromiter(kill_cells, dtype=np.int64, count=len(kill_cells))
-    sc = np.empty((len(mv), _PRIOR_DIM), dtype=np.float64)
-    sc[:, 0] = 1.0
-    sc[:, 1] = lt_self_f[mv] / 5.0
-    sc[:, 2] = lt_opp_f[mv] / 5.0
-    sc[:, 3] = nb_self_f[mv] / 8.0
-    sc[:, 4] = nb_opp_f[mv] / 8.0
-    sc[:, 5] = CENTER_FLAT[mv]
-    sc[:, 6] = np.minimum(jumps_self, 8.0) / 8.0
-    sc[:, 7] = np.minimum(jumps_opp, 8.0) / 8.0
-    sc[:, 8] = (flat[mv] == opp).astype(np.float64)
-    sc[:, 9] = 1.0 if pending >= 0 else 0.0
-    sc[:, 10] = np.isin(mv, ends_arr).astype(np.float64)
-    sc[:, 11] = np.isin(mv, route_arr).astype(np.float64)
-    sc[:, 12] = np.isin(mv, kill_arr).astype(np.float64)
-    sc[:, 13] = open_dirs / 8.0
-    return sc, distill.pattern_tokens(board, player, mv)
-
-
-def _prior_map(board: np.ndarray, player: int, pending: int, turn_count: int,
-               white_turns: int, config: GameConfig, legal) -> np.ndarray:
-    """全部合法着法的蒸馏先验打分(平铺 225 数组,非法位为 0)。"""
-    pm = np.zeros(PLACE_SIZE, dtype=np.float64)
-    if not distill.HAS_PRIOR or not len(legal):
-        return pm
-    sc, tk = _prior_features(board, player, pending, turn_count, white_turns,
-                             config, legal)
-    pm[legal] = distill.prior_scores(sc, tk)
-    return pm
-
-
-def _append_prior_top(out: list, legal, prior_map: np.ndarray,
-                      limit: int = 2) -> None:
-    """把先验打分最高的至多 limit 个着法补进候选(去重、低分保底)。"""
-    if prior_map is None or limit <= 0 or not len(legal):
-        return
-    present = {m for _, m in out}
-    pool = np.asarray([int(t) for t in legal if int(t) not in present],
-                      dtype=np.int64)
-    if not pool.size:
-        return
-    n = min(limit, pool.size)
-    top = pool[np.argsort(prior_map[pool])[-n:]]
-    for m in top:
-        out.append((0.0, int(m)))
-
-
-def _value_features(player: int, m_black: dict, m_white: dict, danger_cnt: int,
-                    danger_mine: int, empty: int, adj_b: float, adj_w: float,
-                    cl_b: float, cl_w: float, ct_b: float,
-                    ct_w: float) -> np.ndarray:
-    """价值校正特征(我方/对方对称排列,训练端同实现)。"""
-    mine, theirs = (m_black, m_white) if player == BLACK else (m_white, m_black)
-    adj_m, adj_t = (adj_b, adj_w) if player == BLACK else (adj_w, adj_b)
-    cl_m, cl_t = (cl_b, cl_w) if player == BLACK else (cl_w, cl_b)
-    ct_m, ct_t = (ct_b, ct_w) if player == BLACK else (ct_w, ct_b)
-    f = np.empty(_VALUE_DIM, dtype=np.float64)
-    f[0] = 1.0
-    for i, k in enumerate(("killable4", "dead4", "open3", "jump3", "closed3")):
-        f[1 + i] = mine[k]
-        f[6 + i] = theirs[k]
-    f[11] = danger_mine
-    f[12] = danger_cnt
-    f[13] = empty
-    f[14] = adj_m
-    f[15] = adj_t
-    f[16] = cl_m
-    f[17] = cl_t
-    f[18] = ct_m
-    f[19] = ct_t
-    return f
-
-
 def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
                 white_turns: int, config: GameConfig, k: int,
-                history=None, out_legal=None, diversity: bool = False,
-                prior: bool = False) -> list:
+                history=None, out_legal=None, diversity: bool = False) -> list:
     """选择性候选着法 [(排序分, move), ...] 降序。杀/解杀/堵路线 + 前 k 构造与位置着。
     history: 可选历史启发分数组(参与入选排序);
     out_legal: 可选 list,回填合法掩码数组(避免调用方重复计算掩码);
-    diversity: 根节点专用,额外保留"贴己方棋群/安静关键点"型着法入候选;
-    prior: 根节点专用,叠加 KataGo 蒸馏先验(缺失模型时自动忽略)。"""
+    diversity: 根节点专用,额外保留"贴己方棋群/安静关键点"型着法入候选。"""
     opp = _other(player)
     mask = ReverseGomoku.legal_mask_for(board, player, pending, white_turns,
                                         config, turn_count)
@@ -827,13 +711,6 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
     if history is not None:
         hist_f = np.minimum(np.asarray(history, dtype=np.float64),
                             O_HIST_CAP) * O_HIST
-    prior_map = None
-    pw = 0.0
-    if prior and distill.ENABLED and distill.HAS_PRIOR \
-            and float(distill.PRIOR_W) != 0.0:
-        prior_map = _prior_map(board, player, pending, turn_count, white_turns,
-                               config, legal)
-        pw = float(distill.PRIOR_W)
     out = []
     if pending >= 0:
         ends, route = _threats(board, player, white_turns, turn_count, config)
@@ -865,9 +742,7 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
             s_vec += (O_BLOCK_SELF4 * (lt_self_f >= 4)
                       + O_BLOCK_SELF3 * (lt_self_f == 3))
             scored = s_vec[rest_arr] + (nb_self_f[rest_arr] + nb_opp_f[rest_arr]) * 1e-4
-            if prior_map is not None:
-                scored = scored + pw * prior_map[rest_arr]
-            # 选取只用静态分+先验(与搜索顺序/历史无关,保证候选集合可复现);
+            # 选取只用静态分(与搜索顺序/历史无关,保证候选集合可复现);
             # 历史启发仅参与已入选着法的最终排序
             m = min(k, rest_arr.size)
             idx = np.argpartition(scored, -m)[-m:]
@@ -876,12 +751,7 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
             else:
                 order = scored[idx]
             idx = idx[np.argsort(order)[::-1]]
-            out.extend((float(s_vec[rest_arr[j]]
-                              + (pw * prior_map[rest_arr[j]]
-                                 if prior_map is not None else 0.0)),
-                        int(rest_arr[j])) for j in idx)
-        if prior_map is not None:
-            _append_prior_top(out, legal, prior_map)
+            out.extend((float(s_vec[rest_arr[j]]), int(rest_arr[j])) for j in idx)
         if diversity:
             _append_diversity(out, legal, nb_self_f)
         return sorted(out, reverse=True)
@@ -930,8 +800,6 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
         # 选取用静态分(与历史/搜索顺序无关,保证候选集合可复现);
         # 历史启发只参与入选后的排序
         key = base[empty_cells] + dens[empty_cells]
-        if prior_map is not None:
-            key = key + pw * prior_map[empty_cells]
         m = min(k, empty_cells.size)
         idx = np.argpartition(key, -m)[-m:]
         if hist_f is not None:
@@ -939,13 +807,8 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
                 + dens[empty_cells][idx]
         else:
             order = key[idx]
-        if prior_map is not None:
-            order = order + pw * prior_map[empty_cells[idx]]
         idx = idx[np.argsort(order)[::-1]]
-        out.extend((float(base[empty_cells[j]]
-                          + (pw * prior_map[empty_cells[j]]
-                             if prior_map is not None else 0.0)),
-                    int(empty_cells[j])) for j in idx)
+        out.extend((float(base[empty_cells[j]]), int(empty_cells[j])) for j in idx)
     cap_cells = rest_arr[~empty_f[rest_arr]]
     if cap_cells.size:
         # 向量化安置评分图,占领格取"可达安置格中的最优"作拆连珠代价
@@ -971,16 +834,9 @@ def _candidates(board: np.ndarray, player: int, pending: int, turn_count: int,
             cap_scores[i] = s
         m = min(k, cap_cells.size)
         key = cap_scores + dens[cap_cells]
-        if prior_map is not None:
-            key = key + pw * prior_map[cap_cells]
         idx = np.argpartition(key, -m)[-m:]
         idx = idx[np.argsort(key[idx])[::-1]]
-        out.extend((float(cap_scores[j]
-                          + (pw * prior_map[cap_cells[j]]
-                             if prior_map is not None else 0.0)),
-                    int(cap_cells[j])) for j in idx)
-    if prior_map is not None:
-        _append_prior_top(out, legal, prior_map)
+        out.extend((float(cap_scores[j]), int(cap_cells[j])) for j in idx)
     if diversity:
         _append_diversity(out, legal, nb_self_f)
     return sorted(out, reverse=True)
@@ -1268,7 +1124,7 @@ def _root_iterative(board, player, pending, turn_count, white_turns, config,
         if mask[book_move]:
             return [(int(book_move), 0.0)], True
     cands = _candidates(board, player, pending, turn_count, white_turns,
-                        config, ROOT_K, diversity=True, prior=True)
+                        config, ROOT_K, diversity=True)
     if not cands:
         # 必守剪枝可能把候选全部剪掉(被绝杀且无防守招):此刻仍有合法着法,
         # 把全部合法着法交给迭代加深搜索——将死值带 ply 步数(见 _search),

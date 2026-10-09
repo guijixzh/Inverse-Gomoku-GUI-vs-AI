@@ -77,8 +77,9 @@ weights. All code is MIT-licensed and heavily AI-generated.
 - 首次打开需下载运行环境(约 10-20MB),之后访问走 Service Worker 缓存;
   三档难度对应启发式深度 2 / 4 / 8(带时间预算,超时取上一层完整搜索结果),
   默认「困难」= 深度 8 + 每步 12 秒,与桌面默认一致;
-- 「设定」可切换**引擎版本**(新版强化 / 老版经典)与 **VCF 强制杀链**(仅新版生效),
-  默认新版 + VCF 开(最强);老版为优化前的冻结算法;
+- 「设定」可切换**引擎版本**(初级经典 / 中级强化 / 高级+蒸馏)与 **VCF 强制杀链**
+  (中级/高级生效),默认**高级 + VCF 开**(最强);三档等时对拍呈清晰梯度
+  (高级对中级 82%、中级对初级 88%、高级对初级 98%,各 96 局);
 - 功能对齐 pygame GUI:落子/占领/安置、危险提示、手数、移子箭头、辅助射线、音效、
   读秒、复盘手数轴与试下分支、`.afg` 棋谱导入导出、人机/人人/机机模式与全部快捷键;
 - 浏览器内无法运行 KataGo 与 torch 权重,网页版仅提供启发式 AI;需要 KataGo 请用桌面版。
@@ -198,10 +199,12 @@ Python 缺少依赖,可先运行 `python scripts/setup_env.py --install` 一键�
 `set PY="你的python.exe路径"` 指定解释器(例如 conda 环境)。
 
 启动后点「设定」可随时更换引擎与参数。桌面默认:**深度 8 + AI 每步读秒 12 秒**
-(与网页困难档一致);启发式 AI 可切换**引擎版本**(新版强化 / 老版经典)与
-**VCF 强制杀链**开关(默认新版 + VCF 开,即最强配置)。命令行等价参数:
-`--heuristic-depth`、`--limit none|ai`、`--ai-time`、`--heuristic-version new|old`
-与 `--no-vcf`。1–4 切换人执黑/人执白/人人/机机模式。
+(与网页困难档一致,三档引擎版本通用);启发式 AI 可切换**引擎版本**
+(**初级**经典 / **中级**强化(修复+开局库) / **高级**+蒸馏,默认高级)与
+**VCF 强制杀链**开关(初级无此功能;默认高级 + VCF 开,即最强配置)。命令行等价参数:
+`--heuristic-depth`、`--limit none|ai`、`--ai-time`、
+`--heuristic-version beginner|mid|advanced`(兼容旧值 old/new)与 `--no-vcf`。
+1–4 切换人执黑/人执白/人人/机机模式。
 
 ### 命令行对战
 
@@ -246,7 +249,7 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 |---|---|---|---|
 | 随机先验 MCTS | numpy | 低 | 无额外文件的默认兜底 |
 | 自研网络 MCTS | torch + `.pth` | 不足(训练失败) | 研究/复现用途 |
-| 启发式 AI | numpy | 中高 | 深度 1–8,默认 8 + AI 读秒 12s;新版(默认,含 VCF 可选)/ 老版经典 |
+| 启发式 AI | numpy | 中高 | 深度 1–8,默认 8 + AI 读秒 12s;三档版本:初级(经典)/ 中级(强化)/ 高级(+蒸馏,默认) |
 | KataGo(逆五) | 外部 exe + `.bin` | 高 | 推荐实用引擎 |
 
 权重明细、加载方式与 KataGo 配置见 [`models/README.md`](models/README.md)
@@ -257,11 +260,19 @@ C++ `rules_probe`(由 KataGomo 构建,设置 `ANTIFIVE_RULES_PROBE` 后启用,�
 低内存环境可设 19-20)。对弈与分析默认启用独立强制杀链搜索(VCF 类,证明式必胜):
 基础预算 `ANTIFIVE_VCF_BUDGET` 默认 0.05s,有对局限时时按剩余预算的 5% 放宽
 (上限 0.6s,见 `heuristic._vcf_slice`),`ANTIFIVE_VCF=0` 关闭,
-`ANTIFIVE_VCF_DEPTH` 默认 8;桌面与网页的「设定」面板均可切换引擎版本(新版/
-老版)与 VCF 开关,默认**新版 + VCF 开**。另有:开局首手走 KataGo 离线开局库
+`ANTIFIVE_VCF_DEPTH` 默认 8;桌面与网页的「设定」面板均可切换引擎版本
+(**初级**=经典冻结版 / **中级**=修复+开局库 / **高级**=中级+蒸馏,默认)与
+VCF 开关,默认**高级 + VCF 开**。另有:开局首手走 KataGo 离线开局库
 (`openbook.py` + `openbook_data.py`,D4 对称规范化,包内纯数据、网页可用,
 `ANTIFIVE_NO_BOOK=1` 关闭);根节点对前 3 候选做一次"防守 VCF"校验(从搜索
-预算中预留 ≤0.3s,证明对手强制杀则降为必败分)。搜索基准与新旧对拍:
+预算中预留 ≤0.3s,证明对手强制杀则降为必败分)。另含 **KataGo 蒸馏价值校正**
+(D2):20 维"我方/对方对称"特征的小线性模型预测 KataGo 胜率,按权重 0.5
+混入 `evaluate`(纯 numpy,网页可用;`ANTIFIVE_VALUE_W` 调权重、
+`ANTIFIVE_NO_DISTILL=1` 关闭);策略先验(D1,标量+局部模式特征)已训练但
+默认关闭(`ANTIFIVE_PRIOR_W=0`,设为正数可开启)。训练管线:
+`python -m antifive.tools.build_distill_data`(20k visits 标注,可并行续跑)
+→ `python -m antifive.tools.train_distill`(写出包内 `distill_data.py`)。
+搜索基准与新旧对拍:
 
 ```bash
 python -m antifive.tools.heur_bench --depths 4,5,6            # 固定局面池基准
@@ -300,7 +311,9 @@ Inverse-Gomoku-GUI-vs-AI/
 │   ├── threat_search.py        # 独立强制杀链搜索(VCF,可开关)
 │   ├── openbook.py             # 开局库查表(D4 对称规范化,可开关)
 │   ├── openbook_data.py        # 开局库数据(KataGo 离线生成)
-│   ├── heuristic_versions.py   # 启发式版本调度(新版/老版,VCF 开关)
+│   ├── distill.py              # KataGo 蒸馏推理(策略先验/价值校正)
+│   ├── distill_data.py         # 蒸馏权重(KataGo 离线训练)
+│   ├── heuristic_versions.py   # 启发式版本调度(初级/中级/高级,VCF 开关)
 │   ├── tactics.py              # 杀棋检测
 │   ├── record.py               # .afg 棋谱读写
 │   ├── gui.py                  # pygame 图形界面

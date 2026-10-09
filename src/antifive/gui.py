@@ -83,10 +83,11 @@ PANEL_W = 320
 WIN_W = BOARD_PX + PANEL_W
 WIN_H = BOARD_PX + 150          # 底部多留空间容纳全量快捷键提示
 
-HEURISTIC_DEPTH_DEFAULT = 8     # 启发式 AI 默认搜索深度(与网页版困难档一致)
+HEURISTIC_DEPTH_DEFAULT = 8     # 启发式 AI 默认搜索深度(三档版本通用,与网页困难档一致)
 HEURISTIC_TIME_BUDGET = 50.0     # 启发式 AI 不限时模式外的兜底思考时间(秒)
-HEURISTIC_VERSION_DEFAULT = "new"   # 启发式引擎版本: "new"=强化版 / "old"=经典版
-HEURISTIC_VCF_DEFAULT = True        # 新版启发式是否启用强制杀链搜索(VCF)
+# 引擎版本三档: beginner=初级(经典) / mid=中级(修复+开局库,无蒸馏) / advanced=高级(+蒸馏)
+HEURISTIC_VERSION_DEFAULT = "advanced"
+HEURISTIC_VCF_DEFAULT = True        # 中级/高级是否启用强制杀链搜索(VCF)
 AI_TIME_BUDGET_DEFAULT = 12.0    # 默认读秒:AI 每步思考时间上限(秒)
 LIMIT_MODE_DEFAULT = "ai"        # 默认仅 AI 限时读秒(不限时可被搜太慢,深度 8 尤甚)
 NN_SIMS_DEFAULT = 1200           # 神经网络"决策默认阈值"(默认模拟次数)
@@ -484,10 +485,13 @@ class _HeuristicEngine:
         self.depth = depth
         self.time_budget = time_budget          # None = 不限时(按深度完整搜索)
         self.version = hv.normalize(version)
-        self.use_vcf = bool(use_vcf)
+        self.use_vcf = bool(use_vcf) and hv.supports_vcf(self.version)
         self.progress = 0                       # 已搜索节点数(实时计算量)
-        self._tt = None                         # 跨步复用置换表(仅新版)
-        if self.version == hv.VERSION_NEW:
+        self._tt = None                         # 跨步复用置换表(中级/高级)
+        if self.version == hv.VERSION_MID:
+            from .tools import heuristic_v5
+            self._tt = heuristic_v5._TT()
+        elif self.version == hv.VERSION_ADVANCED:
             from .heuristic import _TT
             self._tt = _TT()
 
@@ -1013,19 +1017,20 @@ class SettingsScreen:
             else:
                 self.depth_box.rect = self._depth_input
             y += 34 + 12
-            # 引擎版本:新版(强化,可选 VCF) / 老版(冻结快照)
+            # 引擎版本三档:初级(经典) / 中级(修复+开局库) / 高级(+蒸馏)
             self._hver_label_y = y
             y += 24
-            ver = (("新版(强化)", "new"), ("老版(经典)", "old"))
-            bwv = (w - 12) // 2
+            ver = (("初级", "beginner"), ("中级", "mid"), ("高级", "advanced"))
+            bwv3 = (w - 24) // 3
             self._hver_radios = [
-                (pygame.Rect(x0 + i * (bwv + 12), y, bwv, 34), lab, val)
+                (pygame.Rect(x0 + i * (bwv3 + 12), y, bwv3, 34), lab, val)
                 for i, (lab, val) in enumerate(ver)]
             y += 34 + 12
-            # 强制杀链搜索(VCF):仅新版生效;默认开
+            # 强制杀链搜索(VCF):初级无此功能;默认开
             self._hvcf_label_y = y
             y += 24
             vcf = (("VCF 开(强制杀链)", True), ("VCF 关", False))
+            bwv = (w - 12) // 2
             self._hvcf_radios = [
                 (pygame.Rect(x0 + i * (bwv + 12), y, bwv, 34), lab, val)
                 for i, (lab, val) in enumerate(vcf)]
@@ -1154,8 +1159,10 @@ class SettingsScreen:
         for r, label, val in self._hver_radios:
             if r.collidepoint(pos):
                 self.heuristic_version = val
+                if val == "beginner":
+                    self.heuristic_vcf = False   # 初级无 VCF
                 return None
-        if self.heuristic_version != "old":
+        if self.heuristic_version != "beginner":
             for r, label, val in self._hvcf_radios:
                 if r.collidepoint(pos):
                     self.heuristic_vcf = bool(val)
@@ -1315,15 +1322,17 @@ class SettingsScreen:
         elif self.kind == "heuristic":
             self._draw_numrow(screen, font_sm, "启发式搜索深度", self.depth_box,
                               self._depth_rect, self._depth_minus, self._depth_plus)
-            self._draw_section(screen, "引擎版本", self._hver_label_y)
+            self._draw_section(screen, "引擎版本(初级经典 / 中级强化 / 高级+蒸馏)",
+                               self._hver_label_y)
             for r, label, val in self._hver_radios:
                 self._draw_radio(screen, font, r, label, val == self.heuristic_version)
-            old = self.heuristic_version == "old"
-            self._draw_section(screen, "强制杀链搜索 VCF(仅新版生效)", self._hvcf_label_y)
+            beginner = self.heuristic_version == "beginner"
+            self._draw_section(screen, "强制杀链搜索 VCF(中级/高级生效)",
+                               self._hvcf_label_y)
             for r, label, val in self._hvcf_radios:
                 self._draw_radio(screen, font, r, label,
-                                 (not old) and bool(val) == self.heuristic_vcf,
-                                 disabled=old)
+                                 (not beginner) and bool(val) == self.heuristic_vcf,
+                                 disabled=beginner)
         elif self.kind == "kata":
             self._draw_pathrow(screen, font_sm, "权重模型(.bin)", self.kata_weight_box,
                                self._kata_weight_input,
@@ -1512,7 +1521,7 @@ class App:
         self.heuristic_depth = HEURISTIC_DEPTH_DEFAULT  # 当前启发式 AI 搜索深度
         self.heuristic_version = getattr(args, "heuristic_version",
                                          HEURISTIC_VERSION_DEFAULT)
-        self.heuristic_vcf = not getattr(args, "no_vcf", False)  # 新版 VCF 开关
+        self.heuristic_vcf = not getattr(args, "no_vcf", False)  # 中级/高级 VCF 开关
         self.kata_cfg = _kata_defaults()  # KataGo 引擎(可执行/配置/权重)路径
         self.settings = None          # 打开的设定面板(SettingsScreen 或 None)
         self._engine_from_cli = False
@@ -1571,7 +1580,8 @@ class App:
                 use_vcf = self.heuristic_vcf
             self.heuristic_depth = depth
             self.heuristic_version = hv.normalize(version)
-            self.heuristic_vcf = bool(use_vcf)
+            self.heuristic_vcf = bool(use_vcf) and hv.supports_vcf(
+                self.heuristic_version)
             self.model_path = None
             self.ai_black = _HeuristicEngine(depth, ai_tb,
                                              self.heuristic_version,
@@ -1580,7 +1590,7 @@ class App:
                                              self.heuristic_version,
                                              self.heuristic_vcf)
             vtxt = hv.label(self.heuristic_version)
-            if self.heuristic_version == hv.VERSION_NEW:
+            if hv.supports_vcf(self.heuristic_version):
                 vtxt += "·VCF开" if self.heuristic_vcf else "·VCF关"
             self.engine_desc = f"启发式 AI({vtxt}, 深度{depth})"
             return
@@ -2330,7 +2340,7 @@ class App:
         if isinstance(self.ai_black, _HeuristicEngine):
             from . import heuristic_versions as hv
             vtxt = hv.label(self.heuristic_version)
-            if self.heuristic_version == hv.VERSION_NEW:
+            if hv.supports_vcf(self.heuristic_version):
                 vtxt += "VCF开" if self.heuristic_vcf else "VCF关"
             engine, fname, param = "启发式 AI", vtxt, f"深度 {self.heuristic_depth} 层"
         elif isinstance(self.ai_black, _KataGoEngine):
@@ -2615,6 +2625,12 @@ class App:
         pygame.draw.line(self.screen, COLOR_LAST, (t, ax_y - 9), (t, ax_y + 9), 3)
 
 
+def _normalize_version(v: str) -> str:
+    """CLI 版本参数规范化(兼容 old/new 旧值)。"""
+    from . import heuristic_versions as hv
+    return hv.normalize(v)
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser(description="逆五子棋 pygame 界面")
@@ -2625,10 +2641,12 @@ def main():
     p.add_argument("--heuristic-depth", type=int, default=HEURISTIC_DEPTH_DEFAULT,
                    help=f"启发式 AI 搜索深度(默认 {HEURISTIC_DEPTH_DEFAULT},1-8)")
     p.add_argument("--heuristic-version", default=HEURISTIC_VERSION_DEFAULT,
-                   choices=("new", "old"),
-                   help="启发式引擎版本: new=强化版(默认) / old=经典版")
+                   type=_normalize_version,
+                   choices=("beginner", "mid", "advanced"),
+                   help="启发式引擎版本: beginner=初级(经典) / mid=中级(强化) / "
+                        "advanced=高级(+蒸馏,默认)")
     p.add_argument("--no-vcf", action="store_true",
-                   help="新版启发式关闭强制杀链搜索(VCF),默认开启")
+                   help="中级/高级关闭强制杀链搜索(VCF),默认开启")
     p.add_argument("--limit", default=LIMIT_MODE_DEFAULT, choices=("none", "ai"),
                    help="对局限时: ai=仅 AI 方限时读秒(默认), none=不限时")
     p.add_argument("--ai-time", type=float, default=AI_TIME_BUDGET_DEFAULT,

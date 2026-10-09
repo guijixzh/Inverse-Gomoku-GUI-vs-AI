@@ -14,10 +14,12 @@ Web Worker 中的 JS 侧只做两件事:
 - {"cmd": "move", "idx": n, "allow_suicide": bool}     走一步(落子/占领/安置)
 - {"cmd": "undo"}                                      悔一步
 - {"cmd": "ai", "depth": 2|4|8, "budget": sec,
-   "engine": "new"|"old", "vcf": bool}                 AI 走一步(默认新版+VCF)
+   "engine": "beginner"|"mid"|"advanced", "vcf": bool}
+                                                       AI 走一步(默认高级+VCF;
+                                                       兼容旧值 old/new)
 - {"cmd": "rays", "idx": n}                            占领预览:可安置格掩码
 - {"cmd": "hint", "depth": 2, "budget": 2.0,
-   "engine": "new"|"old", "vcf": bool}                 提示:候选着法与价值
+   "engine": "beginner"|"mid"|"advanced", "vcf": bool} 提示:候选着法与价值
 - {"cmd": "export", "moves": [..]}                     导出 .afg 文本
 - {"cmd": "import", "text": "..."}                     读取 .afg 文本
 - {"cmd": "goto", "moves": [..], "pos": k}             复盘跳转:按变化线重建到第 k 手
@@ -214,15 +216,15 @@ def _cmd_ai(sess: _Session, req: dict) -> dict:
     engine = hv.normalize(req.get("engine"))
     vcf_raw = req.get("vcf")
     use_vcf = None if vcf_raw is None else bool(vcf_raw)
-    is_new = engine == hv.VERSION_NEW
+    extra = hv.supports_vcf(engine)          # 初级无 tt/VCF
     sess.last_nodes = 0
     t0 = time.perf_counter()
     move = hv.choose(engine, g.board, g.current_player, g.pending,
                      g.turn_count, g.white_turns, g.config, sess.rng,
                      depth=depth, time_budget=budget,
                      progress_cb=sess.progress,
-                     tt=sess.tt if is_new else None,
-                     use_vcf=use_vcf if is_new else None)
+                     tt=sess.tt if extra else None,
+                     use_vcf=use_vcf if extra else None)
     sess.last_elapsed = time.perf_counter() - t0
     if move is None:
         _finish_stuck(sess)
@@ -260,12 +262,12 @@ def _cmd_hint(sess: _Session, req: dict) -> dict:
     engine = hv.normalize(req.get("engine"))
     vcf_raw = req.get("vcf")
     use_vcf = None if vcf_raw is None else bool(vcf_raw)
-    is_new = engine == hv.VERSION_NEW
+    extra = hv.supports_vcf(engine)          # 初级无 tt/VCF
     pos_v, moves = hv.analysis(
         engine, g.board, g.current_player, g.pending, g.turn_count,
         g.white_turns, g.config, sess.rng, depth=depth, time_budget=budget,
-        k=5, tt=sess.tt if is_new else None,
-        use_vcf=use_vcf if is_new else None)
+        k=5, tt=sess.tt if extra else None,
+        use_vcf=use_vcf if extra else None)
     return {"pos_v": float(pos_v),
             "moves": [{"idx": int(m), "v": float(v)} for m, v in moves]}
 

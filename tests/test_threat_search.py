@@ -245,7 +245,7 @@ def test_find_forced_kill_budget_fallback():
 
 
 def test_defensive_vcf_demotes_proven_loss(monkeypatch):
-    """根候选走完若对手可证明强制杀,该着法降为必败分(防守校验接线)。"""
+    """根候选走完若对手可证明强制杀,该着法降为必败分(防守校验单元)。"""
     from antifive import heuristic as h
 
     cfg = GameConfig(loss_start_turns=8, white_restrict_turns=2,
@@ -255,21 +255,19 @@ def test_defensive_vcf_demotes_proven_loss(monkeypatch):
     board[0, 0] = B
     board[14, 14] = W
     pending = 7 * 15 + 7                     # 白子刚被占领,轮黑安置
-    args = (board, B, pending, 20, 5, cfg)
+    legal = np.nonzero(ReverseGomoku.legal_mask_for(
+        board, B, pending, 5, cfg, 20))[0]
+    assert legal.size >= 3
+    ranked = [(int(m), 1.0) for m in legal[:3]]
 
-    def fake(*a, **k):
-        return stem["v"]
-
-    stem = {"v": None}
-    monkeypatch.setattr(ts, "find_forced_kill", fake)
-    _, moves = h.analysis_moves(*args, np.random.default_rng(0), depth=2,
-                                use_vcf=False)
-    top = moves[0][0]
-    assert dict(moves).get(top, 0.0) > -h.MATE_LIMIT      # 无杀:不降分
-    stem["v"] = 1                                         # 假装对手有杀
-    _, moves2 = h.analysis_moves(*args, np.random.default_rng(0), depth=2,
-                                 use_vcf=False)
-    assert dict(moves2).get(top, 0.0) <= -h.MATE_LIMIT    # 有杀:降为必败
+    monkeypatch.setattr(ts, "find_forced_kill", lambda *a, **k: None)
+    out = h._filter_defensive_kills(list(ranked), board, B, pending, 20, 5,
+                                    cfg, 0.05)
+    assert all(v > -h.MATE_LIMIT for _, v in out)         # 无杀:不降分
+    monkeypatch.setattr(ts, "find_forced_kill", lambda *a, **k: 1)
+    out2 = h._filter_defensive_kills(list(ranked), board, B, pending, 20, 5,
+                                     cfg, 0.05)
+    assert all(v <= -h.MATE_LIMIT for _, v in out2)       # 有杀:降为必败
 
 
 def test_vcf_defaults_and_budget_slice():

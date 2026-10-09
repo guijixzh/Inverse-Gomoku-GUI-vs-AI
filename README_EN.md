@@ -76,9 +76,11 @@ Play in the browser, no installation:
   from a Service Worker cache. Three difficulty tiers map to heuristic depths
   2 / 4 / 8 with a per-move time budget; the default "Hard" tier is depth 8 with
   a 12s clock, matching the desktop default.
-- The settings dialog offers an **engine version** switch (new enhanced / old
-  classic) and a **VCF forced-kill-chain** toggle (new engine only); the default
-  is new + VCF on (strongest).
+- The settings dialog offers an **engine version** switch (Beginner classic /
+  Mid enhanced / Advanced + distillation) and a **VCF forced-kill-chain** toggle
+  (Mid/Advanced only); the default is Advanced + VCF on (strongest). Equal-time
+  round-robin: Advanced beats Mid 82%, Mid beats Beginner 88%, Advanced beats
+  Beginner 98% (96 games each).
 - Feature parity with the pygame GUI: place/capture/relocate, danger hints, move
   numbers, relocation arrows, helper rays, sounds, clocks, replay timeline with
   branch trials, `.afg` import/export, and all four play modes.
@@ -231,7 +233,7 @@ If the default Python lacks dependencies, run
 |---|---|---|---|
 | Uniform-prior MCTS | numpy | Low | default fallback |
 | Self-trained net MCTS | torch + `.pth` | Insufficient (training failed) | research only |
-| Heuristic AI | numpy | Medium-high | depth 1–8, default 8 + 12s AI clock; new engine (default, VCF optional) / old classic |
+| Heuristic AI | numpy | Medium-high | depth 1–8, default 8 + 12s AI clock; three versions: Beginner (classic) / Mid (enhanced) / Advanced (+distillation, default) |
 | KataGo (inverse gomoku) | external exe + `.bin` | High | recommended |
 
 The heuristic AI loads tuned parameters from `data/params.json` (whitelisted
@@ -243,7 +245,15 @@ widened to 5% of the move budget (capped at 0.6s) when a clock is used,
 KataGo-generated opening book for the first move (`openbook.py` +
 `openbook_data.py`, D4-symmetry lookup, `ANTIFIVE_NO_BOOK=1` to disable) and a
 bounded root "defensive VCF" check (top-3 candidates, <=0.3s reserved from the
-search budget). See [`models/README.md`](models/README.md) and
+search budget). It also ships a **KataGo-distilled value correction** (D2): a
+tiny linear model over 20 symmetric features predicts KataGo winrate and is
+blended into `evaluate` at weight 0.5 (pure numpy, web-compatible;
+`ANTIFIVE_VALUE_W` to scale, `ANTIFIVE_NO_DISTILL=1` to disable). A candidate
+policy prior (D1) is trained too but off by default (`ANTIFIVE_PRIOR_W=0`;
+set positive to enable). Training pipeline:
+`python -m antifive.tools.build_distill_data` then
+`python -m antifive.tools.train_distill` (writes `distill_data.py`).
+See [`models/README.md`](models/README.md) and
 [`docs/engines.md`](docs/engines.md) (Chinese).
 
 ## Record Format

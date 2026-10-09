@@ -1,4 +1,4 @@
-"""启发式引擎版本调度测试:新版(含 VCF 开关)与老版快照的统一入口。"""
+"""启发式引擎版本调度测试:初级/中级/高级三档的统一入口。"""
 
 from __future__ import annotations
 
@@ -15,16 +15,25 @@ def _args(g):
 
 
 def test_normalize_and_labels():
-    assert hv.normalize("old") == hv.VERSION_OLD
-    assert hv.normalize("new") == hv.VERSION_NEW
-    assert hv.normalize(None) == hv.VERSION_NEW
-    assert hv.normalize("bogus") == hv.VERSION_NEW
-    assert hv.label("old") == "老版"
-    assert hv.label("new") == "新版"
+    assert hv.normalize("beginner") == hv.VERSION_BEGINNER
+    assert hv.normalize("mid") == hv.VERSION_MID
+    assert hv.normalize("advanced") == hv.VERSION_ADVANCED
+    assert hv.normalize("old") == hv.VERSION_BEGINNER     # 兼容旧值
+    assert hv.normalize("new") == hv.VERSION_ADVANCED     # 兼容旧值
+    assert hv.normalize(None) == hv.VERSION_ADVANCED
+    assert hv.normalize("bogus") == hv.VERSION_ADVANCED
+    assert hv.label("beginner") == "初级"
+    assert hv.label("mid") == "中级"
+    assert hv.label("advanced") == "高级"
+    assert hv.label("old") == "初级"
+    assert hv.supports_vcf("beginner") is False
+    assert hv.supports_vcf("mid") is True
+    assert hv.supports_vcf("advanced") is True
 
 
 @pytest.mark.parametrize("version,use_vcf", [
-    ("new", True), ("new", False), ("old", True), ("old", False)])
+    ("beginner", True), ("mid", True), ("mid", False),
+    ("advanced", True), ("advanced", False)])
 def test_choose_and_analysis_dispatch(version, use_vcf):
     g = ReverseGomoku()
     rng = np.random.default_rng(0)
@@ -35,7 +44,7 @@ def test_choose_and_analysis_dispatch(version, use_vcf):
                             depth=1, time_budget=1.0, k=3, tt=None,
                             use_vcf=use_vcf)
     assert moves and all(0 <= m < 225 for m, _ in moves)
-    assert float(pv) == float(pv)   # 非 NaN(老版返回 np.float32)
+    assert float(pv) == float(pv)   # 非 NaN(初级返回 np.float32)
 
 
 def test_use_vcf_off_skips_vcf_and_matches_analysis(monkeypatch):
@@ -52,7 +61,7 @@ def test_use_vcf_off_skips_vcf_and_matches_analysis(monkeypatch):
     monkeypatch.setattr(threat_search, "find_forced_kill", _boom)
     g = ReverseGomoku()
     for depth in (2, 3):
-        move = hv.choose("new", *_args(g), np.random.default_rng(7),
+        move = hv.choose("advanced", *_args(g), np.random.default_rng(7),
                          depth=depth, use_vcf=False)
         _, moves = h.analysis_moves(*_args(g), np.random.default_rng(7),
                                     depth=depth, use_vcf=False)
@@ -64,7 +73,7 @@ def test_choose_analysis_consistency():
     """根剪枝不得让 choose 偏离 analysis:选中着法的根价值须在最优值
     的噪声带内(占领/安置/普通着法混用局面,含中盘随机局面)。"""
     from antifive import heuristic as h
-    from antifive.tools import heuristic_v4
+    from antifive.tools import heuristic_v4, heuristic_v5
     games = []
     rng0 = np.random.default_rng(20261008)
     for _ in range(3):
@@ -93,15 +102,20 @@ def test_choose_analysis_consistency():
                     f"choose(root_prune={rp}) 偏离 analysis: {mv} v={val} top={top_v}"
     # 冻结快照仍可加载(供 match_ai --old-module A/B)
     assert heuristic_v4.choose_heuristic_move is not None
+    assert heuristic_v5.choose_heuristic_move is not None
 
 
-def test_gui_engine_accepts_version_and_vcf():
+def test_gui_engine_accepts_three_versions():
     pytest.importorskip("pygame")
     from antifive.gui import _HeuristicEngine
     g = ReverseGomoku()
-    for version, vcf in (("new", True), ("new", False), ("old", True)):
+    cases = (("beginner", True, False), ("beginner", False, False),
+             ("mid", True, True), ("mid", False, False),
+             ("advanced", True, True), ("advanced", False, False))
+    for version, vcf, expected_vcf in cases:
         eng = _HeuristicEngine(depth=1, time_budget=None,
                                version=version, use_vcf=vcf)
-        assert eng.version == version and eng.use_vcf == vcf
+        assert eng.version == version
+        assert eng.use_vcf == expected_vcf     # 初级强制无 VCF
         move = eng.choose(g)
         assert move is not None and g.legal_mask()[move]
