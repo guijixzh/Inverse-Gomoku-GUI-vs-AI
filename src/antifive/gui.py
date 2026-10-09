@@ -3,11 +3,15 @@
 操作:
 - 左键:普通回合点空位=落子,点对方棋子=占领(移子第一步);
        移子待定时,绿色高亮为可达格,点击=安置手中棋子
+- 落子确认:默认开启(棋盘下方「落子确认」按钮或 C 键开关),
+  开启后同一位置第一次点击只固定虚影预览,再点同位置才执行,
+  覆盖落子/占领/安置与复盘试下,防止误触
 - 按钮/快捷键: 1-4 切换模式, R 新局, U 悔棋, D 危险提示, N 棋子手数,
-  A 移子箭头指示, H 辅助射线, S 保存棋谱, L 读取棋谱, E 设定, Esc 退出;
+  A 移子箭头指示, H 辅助射线, C 落子确认, S 保存棋谱, L 读取棋谱,
+  E 设定, Esc 退出;
   「设定」按钮位于右侧按钮列表最顶端,随时更换 AI 与对局设置;
   右上角时钟显示 AI 读秒(分钟:秒.十分位),点击可开关限时,
-  危险/手数/箭头/射线开关与全部快捷键提示统一在棋盘下方
+  危险/手数/箭头/射线/确认开关与全部快捷键提示统一在棋盘下方
 - 读秒:AI 读秒倒计时固定在右上角时钟框内(暖木配色),不再遮挡棋盘;
   设定面板中思考时间/模拟次数/深度均可点击输入框直接输入数字
 - AI 状态:右上角「AI 读秒」标题右侧为 AI 思考指示灯(思考中红灯+「AI思考中」,
@@ -254,7 +258,7 @@ class Board:
     def draw(self, screen, game, hover, held_pos, show_danger, legal_mask,
              show_numbers: bool = False, num: np.ndarray = None,
              arrow: tuple = None, hover_target: tuple = None,
-             hover_rays: tuple = None):
+             hover_rays: tuple = None, confirm_idx: int = None):
         screen.blit(self.bg, (0, 0))
         # 危险提示
         if show_danger:
@@ -331,24 +335,41 @@ class Board:
         last = game.record()[-1] if game.record() else None
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
-                if r * BOARD_SIZE + c in fly_skip:
+                idx = r * BOARD_SIZE + c
+                if idx in fly_skip:
                     continue
                 v = game.board[r, c]
                 if v == EMPTY:
                     continue
                 pos = self.cell_pos(r, c)
-                is_last = (last == r * BOARD_SIZE + c)
+                is_last = (last == idx)
                 if v == BLACK:
                     surf = self.stone_b_h if is_last else self.stone_b
                 else:
                     surf = self.stone_w_h if is_last else self.stone_w
+                if idx == confirm_idx:               # 占领目标:半透明示意将被拿起
+                    surf.set_alpha(140)
                 screen.blit(surf, (pos[0] - self.stone_r, pos[1] - self.stone_r))
+                surf.set_alpha(255)
                 if show_numbers and num is not None and num[r, c] > 0:
                     txt = self.font_idx.render(
                         str(int(num[r, c])), True,
                         (255, 255, 255) if v == BLACK else COLOR_TEXT)
                     screen.blit(txt, (pos[0] - txt.get_width() // 2,
                                       pos[1] - txt.get_height() // 2))
+        # 落子确认:虚影固定(空位=半透明棋子,占领目标上面的半透明棋子已在上方绘制)
+        if confirm_idx is not None:
+            cr, cc = divmod(int(confirm_idx), BOARD_SIZE)
+            pos = self.cell_pos(cr, cc)
+            if game.board[cr, cc] == EMPTY:
+                # 安置待定时手中棋子属于对方,与 held 渲染同色
+                color = (WHITE if game.current_player == BLACK else BLACK) \
+                    if game.pending >= 0 else game.current_player
+                surf = self.stone_b if color == BLACK else self.stone_w
+                surf.set_alpha(150)
+                screen.blit(surf, (pos[0] - self.stone_r, pos[1] - self.stone_r))
+                surf.set_alpha(255)
+            pygame.draw.circle(screen, COLOR_TARGET, pos, self.stone_r + 2, 2)
         # 移子箭头:棋子飞行(0.5s)→ 蓝色箭头保持到下一步完成
         if arrow is not None:
             f, t, prog = arrow
@@ -1484,6 +1505,8 @@ class App:
         self.show_numbers = False        # 棋子上显示落子手数
         self.show_arrows = True          # 移子箭头指示(占领→安置)
         self.show_rays = True            # 辅助射线:悬停棋子临时显示其可移动位置
+        self.confirm_move = True         # 落子确认:点一下固定虚影,再点同位置才执行
+        self.confirm_idx = None          # 当前固定的虚影位置(未固定为 None)
         self.arrow_anim = None           # (占领idx, 安置idx, 飞行起始时间|None=静态保持)
         self.toggle_btns: list = []      # 底部开关按钮 (rect, label, fn)
         self.ai_lock = threading.Lock()
@@ -1802,6 +1825,7 @@ class App:
         self.epoch += 1
         self.review = False
         self.arrow_anim = None
+        self.confirm_idx = None
         self.show_result_overlay = False
         self.game = ReverseGomoku()
 
@@ -1812,6 +1836,7 @@ class App:
         with self.ai_lock:
             self.ai_result = None
         self.epoch += 1
+        self.confirm_idx = None
         if not self.game.history:
             return
         if self.game.pending >= 0:
@@ -1830,29 +1855,44 @@ class App:
             return pos
         return (int(pos[0] / self.scale), int(pos[1] / self.scale))
 
+    def _confirm_gate(self, idx: int) -> bool:
+        """落子确认门控:开启且非重复点击时固定虚影并返回 False;
+        再次点击同位置(或关闭确认)返回 True,交由调用方执行。"""
+        if not self.confirm_move:
+            return True
+        if self.confirm_idx == idx:
+            self.confirm_idx = None
+            return True
+        self.confirm_idx = idx
+        return False
+
     def click(self, pos):
         # pos 已是虚拟画布坐标(事件循环 _map_pos 一次即可,此处不可重复映射,
         # 否则 scale<1.0 的缩放屏上落子会向右下偏移)
-        if self.review:
-            cell = self.board.screen_to_cell(*pos)
-            if cell is not None:
-                self.review_try(cell[0] * BOARD_SIZE + cell[1])
-            return
-        if self.game.game_over:
-            return
-        if is_ai_turn(self.mode, self.game):
-            return
         cell = self.board.screen_to_cell(*pos)
         if cell is None:
             return
         idx = cell[0] * BOARD_SIZE + cell[1]
-        if self.game.legal_mask()[idx]:
-            self.epoch += 1
-            self._play_move_sound(self.game, idx)
-            self.game.make_move(idx)
-            self._mark_move_arrow(True)
-            if self.game.game_over:
-                self.enter_review(True)
+        if self.review:
+            if self.game.game_over or not self.game.legal_mask()[idx]:
+                self.confirm_idx = None          # 点到非法格:取消已固定的虚影
+                return
+            if self._confirm_gate(idx):
+                self.review_try(idx)
+            return
+        if self.game.game_over or is_ai_turn(self.mode, self.game):
+            return
+        if not self.game.legal_mask()[idx]:
+            self.confirm_idx = None              # 点到非法格:取消已固定的虚影
+            return
+        if not self._confirm_gate(idx):
+            return
+        self.epoch += 1
+        self._play_move_sound(self.game, idx)
+        self.game.make_move(idx)
+        self._mark_move_arrow(True)
+        if self.game.game_over:
+            self.enter_review(True)
 
     # ---- 复盘 ----
     def enter_review(self, overlay: bool = False):
@@ -1866,6 +1906,7 @@ class App:
         self.review_result = record.game_result(self.game)
         self.result_shown_at = 0.0
         self.show_result_overlay = overlay
+        self.confirm_idx = None
         self._mark_move_arrow(False)
 
     def review_jump(self, k: int) -> None:
@@ -1874,6 +1915,7 @@ class App:
         with self.ai_lock:
             self.ai_result = None
         self.epoch += 1
+        self.confirm_idx = None
         g = ReverseGomoku(self.game.config)
         for m in self.moves[:self.pos]:
             g.make_move(m)
@@ -1938,6 +1980,14 @@ class App:
 
     def _toggle_rays(self):
         self.show_rays = not self.show_rays
+
+    def _toggle_confirm(self):
+        self.confirm_move = not self.confirm_move
+        if not self.confirm_move:
+            self.confirm_idx = None
+        self.set_status("落子确认已" + ("开启 · 点同位置两次才落子"
+                                       if self.confirm_move else
+                                       "关闭 · 单击即落子"))
 
     def _toggle_sound(self):
         self.sound_enabled = not self.sound_enabled
@@ -2038,6 +2088,8 @@ class App:
             self._toggle_arrows()
         if edge(pygame.K_h):
             self._toggle_rays()
+        if edge(pygame.K_c):
+            self._toggle_confirm()
         if edge(pygame.K_m):
             self._toggle_sound()
         if edge(pygame.K_s):
@@ -2110,6 +2162,8 @@ class App:
                         self._toggle_arrows()
                     elif ev.key == pygame.K_h:
                         self._toggle_rays()
+                    elif ev.key == pygame.K_c:
+                        self._toggle_confirm()
                     elif ev.key == pygame.K_m:
                         self._toggle_sound()
                     elif ev.key == pygame.K_s:
@@ -2130,7 +2184,8 @@ class App:
                     k = ev.text.lower()
                     kcode = {"r": pygame.K_r, "u": pygame.K_u, "d": pygame.K_d,
                              "n": pygame.K_n, "a": pygame.K_a, "h": pygame.K_h,
-                             "m": pygame.K_m, "s": pygame.K_s, "l": pygame.K_l,
+                             "c": pygame.K_c, "m": pygame.K_m,
+                             "s": pygame.K_s, "l": pygame.K_l,
                              "e": pygame.K_e}.get(k)
                     if kcode is not None:
                         if kcode in self._handled_keys:
@@ -2148,6 +2203,8 @@ class App:
                         self._toggle_arrows()
                     elif k == "h":
                         self._toggle_rays()
+                    elif k == "c":
+                        self._toggle_confirm()
                     elif k == "m":
                         self._toggle_sound()
                     elif k == "s":
@@ -2198,6 +2255,7 @@ class App:
                         self.ai_result = None
                     # 应用时校验代数:任何人类操作(落子/悔棋/新局)都会使代数变化
                     if ep == self.epoch:
+                        self.confirm_idx = None        # AI 行棋,虚影作废
                         if a is None:
                             mover = self.game.current_player
                             eng = self.ai_black if mover == BLACK else self.ai_white
@@ -2302,7 +2360,7 @@ class App:
                         self.show_danger, legal,
                         show_numbers=self.show_numbers, num=num,
                         arrow=arrow, hover_target=hover_target,
-                        hover_rays=hover_rays)
+                        hover_rays=hover_rays, confirm_idx=self.confirm_idx)
 
         # 终局大字蒙版:仅实时对局结束显示,2 秒后自动淡出;载入棋谱不显示
         if self.game.game_over and self.show_result_overlay:
@@ -2362,6 +2420,10 @@ class App:
                 mover, status, kind = ("已终局",
                                        f"结果: {record.game_result(self.game)}",
                                        "result")
+            elif self.confirm_idx is not None:
+                mover, status, kind = (f"{color}·{action}",
+                                       "试下:已选点(虚影) · 再点同位置确认",
+                                       "divergence")
             elif self.moves != self.record_moves:
                 mover, status, kind = (f"{color}·{action}",
                                        f"试下中 · 原谱 {self.review_result}",
@@ -2374,7 +2436,11 @@ class App:
             step_lb, step_val = ("手数",
                                  f"{self.game.turn_count + 1} / {self.game.move_count}")
             mover = f"{color}({who})·{action}"
-            if self.game.pending >= 0:
+            if self.confirm_idx is not None:
+                r, c = divmod(int(self.confirm_idx), BOARD_SIZE)
+                status = f"已选点({chr(65 + c)}{r}) · 再点同位置确认"
+                kind = "pending"
+            elif self.game.pending >= 0:
                 status, kind = "移子待定 · 点击目标位置安置", "pending"
             else:
                 status, kind = "落子待定 · 可占敌移子", "normal"
@@ -2548,14 +2614,15 @@ class App:
             self._draw_shortcut_hints(y0 + 52)
 
     def _draw_context_hint(self, x: int, y: int) -> None:
-        """横栏右侧变化提示(随状态切换,与右侧面板状态框信息互补)。"""
+        """横栏右侧变化提示(随状态切换,与右侧面板状态框信息互补)。
+        文案保持精简,避免与加宽的开关按钮行(6 个)重叠错位。"""
         if self.review:
             if self.game.game_over:
-                hint = "终局 · 点击手数轴跳转回看"
+                hint = "终局 · 点轴跳转回看"
             elif self.moves != self.record_moves:
-                hint = "R 新局退出 · 原谱恢复主变化"
+                hint = "试下中 · 原谱按钮恢复主变化"
             else:
-                hint = "点击手数轴跳转 · 棋盘可试下"
+                hint = "点轴跳转 · 棋盘可试下"
         else:
             hint = "终局或载入棋谱自动复盘"
         t = self.font_xs.render(hint, True, COLOR_TEXT)
@@ -2563,19 +2630,20 @@ class App:
 
     def _draw_shortcut_hints(self, y: int) -> None:
         """底部单行快捷键提示(不换行)。"""
-        line = ("R新局 U悔棋 D危险 N手数 A箭头 H射线 M音效 "
+        line = ("R新局 U悔棋 D危险 N手数 A箭头 H射线 C确认 M音效 "
                 "S保存 L读取 E设定 Esc退出 1-4模式")
         t = self.font_xs.render(line, True, COLOR_TEXT)
         self.screen.blit(t, (16, y))
 
     def _draw_toggle_btns(self, y: int) -> int:
-        """危险/手数/箭头/辅助射线/音效开关,返回按钮行右侧 x。"""
+        """危险/手数/箭头/辅助射线/确认/音效开关,返回按钮行右侧 x。"""
         self.toggle_btns = []
         x = 16
         for label, on, fn in (("危险提示", self.show_danger, self._toggle_danger),
                               ("手数显示", self.show_numbers, self._toggle_numbers),
                               ("箭头指示", self.show_arrows, self._toggle_arrows),
                               ("辅助射线", self.show_rays, self._toggle_rays),
+                              ("落子确认", self.confirm_move, self._toggle_confirm),
                               ("音效", self.sound_enabled, self._toggle_sound)):
             rect = pygame.Rect(x, y, 84, 30)
             self.toggle_btns.append((rect, label, fn))

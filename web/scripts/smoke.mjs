@@ -143,7 +143,17 @@ check(applied.ver === "advanced" && applied.vcf === false &&
   applied.param.includes("VCF关"), "version/vcf applied");
 
 const box = await (await page.$("#board")).boundingBox();
-await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+const cx = box.x + box.width / 2;
+const cy = box.y + box.height / 2;
+await page.mouse.click(cx, cy);
+const ghost = await page.evaluate(() => ({
+  on: window.__antifive.confirmMove,
+  idx: window.__antifive.confirmIdx,
+  count: window.__antifive.state.move_count,
+}));
+check(ghost.on === true && ghost.idx !== null && ghost.count === 0,
+  "confirm move: first click only fixes ghost");
+await page.mouse.click(cx, cy);
 await wait(() => window.__antifive.thinking === true, 30000, 50);
 const remain = await page.evaluate(() => (window.__antifive.deadline - performance.now()) / 1000);
 check(remain > 16 && remain <= 20.5, `limit seconds applied (${remain.toFixed(1)}s)`);
@@ -188,9 +198,14 @@ check(true, "review jump");
 
 const branch = await page.evaluate(async () => {
   const app = window.__antifive;
-  await app.reviewTry(app.state.legal[0]);
-  return { divergence: app.divergence, pos: app.pos };
+  const idx = app.state.legal[0];
+  await app.reviewTry(idx);
+  const ghost = { idx: app.confirmIdx, divergence: app.divergence, pos: app.pos };
+  await app.reviewTry(idx);
+  return { ghost, divergence: app.divergence, pos: app.pos };
 });
+check(branch.ghost.idx !== null && branch.ghost.divergence === null &&
+  branch.ghost.pos === 10, "review trial confirm gate");
 check(branch.divergence === 10 && branch.pos === 11, "branch trial");
 
 await page.evaluate(() => window.__antifive.reviewReset());

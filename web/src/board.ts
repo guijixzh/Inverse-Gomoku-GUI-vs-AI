@@ -38,6 +38,7 @@ export interface BoardView {
   showRays: boolean;
   arrow: ArrowView | null;
   hoverTarget: number | null;
+  confirmIdx: number | null;
 }
 
 function mulberry32(seed: number) {
@@ -376,7 +377,15 @@ export class BoardCanvas {
       if (flying && i === flying.to) continue;
       const x = cellX(i % BOARD_SIZE);
       const y = cellY(Math.floor(i / BOARD_SIZE));
-      this.stone(x, y, v);
+      const isConfirm = i === view.confirmIdx;
+      this.stone(x, y, v, isConfirm ? 0.55 : 1);
+      if (isConfirm) {                          // 占领目标:半透明+绿环示意将被拿起
+        g.strokeStyle = COLOR_TARGET;
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(x, y, STONE_R + 2, 0, Math.PI * 2);
+        g.stroke();
+      }
       if (i === last) {
         g.strokeStyle = COLOR_LAST;
         g.lineWidth = 3;
@@ -391,6 +400,17 @@ export class BoardCanvas {
         g.textBaseline = "middle";
         g.fillText(String(st.numbers[i]), x, y);
       }
+    }
+    if (view.confirmIdx !== null && st.board[view.confirmIdx] === EMPTY) {
+      // 落子确认虚影:空位=半透明棋子(安置待定时为手中棋子颜色)+绿环
+      const x = cellX(view.confirmIdx % BOARD_SIZE);
+      const y = cellY(Math.floor(view.confirmIdx / BOARD_SIZE));
+      this.stone(x, y, st.pending >= 0 ? st.pending_color : st.player, 0.55);
+      g.strokeStyle = COLOR_TARGET;
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(x, y, STONE_R + 2, 0, Math.PI * 2);
+      g.stroke();
     }
     if (flying && flyStone) {
       this.stone(flyStone.x, flyStone.y, st.board[flying.to]);

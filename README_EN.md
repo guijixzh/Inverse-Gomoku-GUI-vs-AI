@@ -82,8 +82,9 @@ Play in the browser, no installation:
   round-robin: Advanced beats Mid 82%, Mid beats Beginner 88%, Advanced beats
   Beginner 98% (96 games each).
 - Feature parity with the pygame GUI: place/capture/relocate, danger hints, move
-  numbers, relocation arrows, helper rays, sounds, clocks, replay timeline with
-  branch trials, `.afg` import/export, and all four play modes.
+  numbers, relocation arrows, helper rays, two-click move confirmation (on by
+  default), sounds, clocks, replay timeline with branch trials, `.afg`
+  import/export, and all four play modes.
 - KataGo and the torch network cannot run in the browser; the web version ships
   the heuristic AI only.
 
@@ -220,6 +221,7 @@ If the default Python lacks dependencies, run
 | N | Move numbers |
 | A | Relocation arrows |
 | H | Hover rays |
+| C | Move confirmation toggle (default on: click the same spot twice to commit) |
 | M | Sound |
 | S / L | Save / load `.afg` record |
 | E | Settings panel |

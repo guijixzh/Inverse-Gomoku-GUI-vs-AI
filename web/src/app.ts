@@ -60,6 +60,8 @@ export class App {
   private showNumbers = false;
   private showArrows = true;
   private showRays = true;
+  private confirmMove = true;
+  private confirmIdx: number | null = null;
 
   private arrow: ArrowView | null = null;
   private hover: { r: number; c: number } | null = null;
@@ -157,6 +159,7 @@ export class App {
       ["手数显示", "numbers"],
       ["箭头指示", "arrows"],
       ["辅助射线", "rays"],
+      ["落子确认", "confirm"],
       ["音效", "sound"],
     ];
     for (const [label, key] of toggleDefs) {
@@ -177,6 +180,10 @@ export class App {
         else this.arrow = null;
       }
       if (key === "rays") this.showRays = !this.showRays;
+      if (key === "confirm") {
+        this.confirmMove = !this.confirmMove;
+        if (!this.confirmMove) this.confirmIdx = null;
+      }
       if (key === "sound") this.sounds.enabled = !this.sounds.enabled;
       this.syncPanel();
       this.needsDraw = true;
@@ -310,7 +317,10 @@ export class App {
       if (this.showArrows) this.rebuildArrowStatic();
       else this.arrow = null;
     } else if (key === "h") this.showRays = !this.showRays;
-    else if (key === "m") this.sounds.enabled = !this.sounds.enabled;
+    else if (key === "c") {
+      this.confirmMove = !this.confirmMove;
+      if (!this.confirmMove) this.confirmIdx = null;
+    } else if (key === "m") this.sounds.enabled = !this.sounds.enabled;
     else if (key === "s") void this.saveRecord();
     else if (key === "l") ($("file-input") as HTMLInputElement).click();
     else if (key === "e") this.openSettings();
@@ -346,6 +356,7 @@ export class App {
     this.pos = 0;
     this.divergence = null;
     this.arrow = null;
+    this.confirmIdx = null;
     this.hideOverlay();
     this.engine
       .call<{ state: GameState }>("new", {})
@@ -415,6 +426,7 @@ export class App {
   }
 
   private applyMove(prev: GameState, next: GameState, moveIdx: number | null) {
+    this.confirmIdx = null;
     if (prev.pending >= 0 && moveIdx !== null) {
       this.arrow = { from: prev.pending, to: moveIdx, t0: performance.now() };
     } else if (next.pending < 0) {
@@ -433,6 +445,28 @@ export class App {
     }
   }
 
+  private confirmGate(idx: number): boolean {
+    if (!this.confirmMove) {
+      this.confirmIdx = null;
+      return true;
+    }
+    if (this.confirmIdx === idx) {
+      this.confirmIdx = null;
+      return true;
+    }
+    this.confirmIdx = idx;
+    this.needsDraw = true;
+    this.syncPanel();
+    return false;
+  }
+
+  private clearGhost() {
+    if (this.confirmIdx === null) return;
+    this.confirmIdx = null;
+    this.needsDraw = true;
+    this.syncPanel();
+  }
+
   private async onBoardClick(idx: number) {
     if (!this.ready || !this.state) return;
     if (this.review) {
@@ -440,7 +474,11 @@ export class App {
       return;
     }
     if (this.state.game_over || this.thinking || this.isAiTurn()) return;
-    if (!this.state.legal.includes(idx)) return;
+    if (!this.state.legal.includes(idx)) {
+      this.clearGhost();
+      return;
+    }
+    if (!this.confirmGate(idx)) return;
     const prev = this.state;
     const epoch = ++this.epoch;
     try {
@@ -462,6 +500,7 @@ export class App {
     const epoch = ++this.epoch;
     this.thinking = false;
     this.deadline = null;
+    this.confirmIdx = null;
     try {
       let res = await this.engine.call<{ state: GameState }>("undo", {});
       if (epoch !== this.epoch) return;
@@ -530,6 +569,7 @@ export class App {
       return;
     }
     this.pos = target;
+    this.confirmIdx = null;
     const epoch = ++this.epoch;
     this.thinking = false;
     this.deadline = null;
@@ -550,7 +590,11 @@ export class App {
 
   private async reviewTry(idx: number) {
     if (!this.state || this.state.game_over) return;
-    if (!this.state.legal.includes(idx)) return;
+    if (!this.state.legal.includes(idx)) {
+      this.clearGhost();
+      return;
+    }
+    if (!this.confirmGate(idx)) return;
     if (this.divergence === null) this.divergence = this.pos;
     this.variation = this.variation.slice(0, this.pos).concat(idx);
     await this.reviewJump(this.pos + 1);
@@ -600,6 +644,7 @@ export class App {
       this.divergence = null;
       this.reviewResult = res.result;
       this.arrow = null;
+      this.confirmIdx = null;
       this.rebuildArrowStatic();
       this.hideOverlay();
       this.setStatus(`已载入 ${res.state.moves.length} 手 [${res.result}] (${file.name})`);
@@ -629,6 +674,7 @@ export class App {
         key === "numbers" ? this.showNumbers :
         key === "arrows" ? this.showArrows :
         key === "rays" ? this.showRays :
+        key === "confirm" ? this.confirmMove :
         key === "sound" ? this.sounds.enabled : false;
       btn.classList.toggle("active", on);
     }
@@ -648,6 +694,9 @@ export class App {
       if (st.game_over) {
         $("info-mover").textContent = "已终局";
         this.setStrip(`结果: ${st.result}`, "result");
+      } else if (this.confirmIdx !== null) {
+        $("info-mover").textContent = `${st.player === BLACK ? "黑" : "白"}·${st.pending >= 0 ? "移子" : "落子"}`;
+        this.setStrip("试下:已选点(虚影) · 再点同位置确认", "divergence");
       } else if (this.isDiverged()) {
         $("info-mover").textContent = `${st.player === BLACK ? "黑" : "白"}·${st.pending >= 0 ? "移子" : "落子"}`;
         this.setStrip(`试下中 · 原谱 ${this.reviewResult}`, "divergence");
@@ -662,6 +711,11 @@ export class App {
       const action = st.pending >= 0 ? "移子" : "落子";
       $("info-mover").textContent = `${st.player === BLACK ? "黑" : "白"}(${who})·${action}`;
       if (st.game_over) this.setStrip(`结果: ${st.result}`, "result");
+      else if (this.confirmIdx !== null) {
+        const r = Math.floor(this.confirmIdx / BOARD_SIZE);
+        const c = this.confirmIdx % BOARD_SIZE;
+        this.setStrip(`已选点(${String.fromCharCode(65 + c)}${r}) · 再点同位置确认`, "pending");
+      }
       else if (st.pending >= 0) this.setStrip("移子待定 · 点击目标位置安置", "pending");
       else this.setStrip("落子待定 · 可占敌移子", "normal");
     }
@@ -750,6 +804,7 @@ export class App {
       showRays: this.showRays,
       arrow: this.showArrows ? this.arrow : null,
       hoverTarget,
+      confirmIdx: this.confirmIdx,
     };
     this.board.draw(view, now);
     if (this.review) this.drawTimeline();
