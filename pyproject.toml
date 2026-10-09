@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "antifive"
-version = "0.9.0"
+version = "1.0.0"
 description = "逆五子棋 AI 对战 GUI:规则引擎、MCTS、启发式 AI、自研策略价值网络与 KataGo 集成"
 readme = "README.md"
 requires-python = ">=3.10"
