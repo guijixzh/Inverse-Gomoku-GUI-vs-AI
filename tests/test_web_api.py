@@ -1,6 +1,7 @@
 """web_api(网页版 JSON 接口)测试(不依赖 torch / pygame)。
 
-覆盖:新局/落子/移子两步/悔棋/AI 应手/辅助射线/提示/导出导入往返/无子可走终局。
+覆盖:新局/落子/移子两步/悔棋/AI 应手/辅助射线/提示/导出导入往返/无子可走终局/
+人类认输与认输棋谱往返。
 """
 
 from __future__ import annotations
@@ -193,3 +194,33 @@ def test_error_does_not_corrupt_state():
     assert not resp["ok"]
     st = _call(cmd="state")["state"]
     assert st["moves"] == [10]
+
+
+def test_resign_command_and_repeat_errors():
+    _call(cmd="new")
+    _call(cmd="move", idx=112)
+    st = _call(cmd="resign", player=BLACK)["state"]
+    assert st["game_over"] and not st["is_draw"]
+    assert st["loser"] == BLACK and st["winner"] == WHITE and st["resigned"] == BLACK
+    assert st["result"] == "黑认输"
+    resp = json.loads(web_api.handle(json.dumps({"cmd": "resign"})))
+    assert not resp["ok"] and "error" in resp
+
+
+def test_resign_record_roundtrip_and_goto():
+    _call(cmd="new")
+    for idx in (112, 0, 113, 1):
+        _call(cmd="move", idx=idx)
+    _call(cmd="resign", player=WHITE)             # 白方认输
+    text = _call(cmd="export")["text"]
+    assert "[Result 白认输]" in text
+    imported = _call(cmd="import", text=text)
+    st = imported["state"]
+    assert imported["result"] == "白认输"
+    assert st["game_over"] and st["resigned"] == WHITE and st["result"] == "白认输"
+    moves = st["moves"]
+    # 中途跳转不补标认输;末手带原谱结果时补标终局
+    st = _call(cmd="goto", moves=moves, pos=len(moves) - 1)["state"]
+    assert not st["game_over"] and st["resigned"] == 0
+    st = _call(cmd="goto", moves=moves, pos=len(moves), result="白认输")["state"]
+    assert st["game_over"] and st["resigned"] == WHITE and st["result"] == "白认输"

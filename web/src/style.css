@@ -308,6 +308,12 @@ button.active {
   border-radius: 10px;
 }
 
+.buttons button.confirm {
+  background: #dc3c3c;
+  border-color: #9c2a1e;
+  color: #fff8f0;
+}
+
 .rules {
   font-size: 12px;
   color: #967f64;

@@ -17,6 +17,8 @@ const VERSION_LABELS: Record<string, string> = {
 
 const MODE_NAMES = ["人执黑", "人执白", "人人对战", "机机观战"];
 
+const RESIGN_CONFIRM_MS = 4000;   // 认输二次确认窗口:首次点击后需在此时长内再点
+
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
   if (!el) throw new Error(`缺少元素 #${id}`);
@@ -62,6 +64,8 @@ export class App {
   private showRays = true;
   private confirmMove = true;
   private confirmIdx: number | null = null;
+  private resignArmedUntil = 0;
+  private resignArmedShown = false;
 
   private arrow: ArrowView | null = null;
   private hover: { r: number; c: number } | null = null;
@@ -124,6 +128,7 @@ export class App {
       ["mode-3", MODE_NAMES[3]],
       ["new", "新局"],
       ["undo", "悔棋"],
+      ["resign", "认输"],
       ["save", "保存棋谱"],
       ["load", "读取棋谱"],
     ];
@@ -146,6 +151,8 @@ export class App {
         this.newGame();
       } else if (action === "undo") {
         void this.undo();
+      } else if (action === "resign") {
+        void this.resign();
       } else if (action === "save") {
         void this.saveRecord();
       } else if (action === "load") {
@@ -274,6 +281,14 @@ export class App {
       if (idx !== null) void this.onBoardClick(idx);
     });
     canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        const target = event.target as HTMLElement | null;
+        if (!target?.closest?.('button[data-action="resign"]')) this.disarmResign();
+      },
+      true,
+    );
     this.timeline.addEventListener("pointerdown", (event) => {
       const seek = (clientX: number) => {
         const rect = this.timeline.getBoundingClientRect();
@@ -357,6 +372,7 @@ export class App {
     this.divergence = null;
     this.arrow = null;
     this.confirmIdx = null;
+    this.disarmResign();
     this.hideOverlay();
     this.engine
       .call<{ state: GameState }>("new", {})
@@ -467,6 +483,53 @@ export class App {
     this.syncPanel();
   }
 
+  private syncResignButton() {
+    const armed = performance.now() < this.resignArmedUntil;
+    if (armed === this.resignArmedShown) return;
+    this.resignArmedShown = armed;
+    const btn = document.querySelector<HTMLButtonElement>('button[data-action="resign"]');
+    if (!btn) return;
+    btn.textContent = armed ? "确定？" : "认输";
+    btn.classList.toggle("confirm", armed);
+  }
+
+  private disarmResign() {
+    if (!this.resignArmedUntil && !this.resignArmedShown) return;
+    this.resignArmedUntil = 0;
+    this.syncResignButton();
+  }
+
+  private async resign() {
+    if (!this.ready || !this.state || this.review || this.state.game_over) {
+      this.disarmResign();
+      return;
+    }
+    if (this.mode === 3) {
+      this.disarmResign();
+      this.setStatus("机机观战模式无需认输");
+      return;
+    }
+    if (performance.now() >= this.resignArmedUntil) {
+      this.resignArmedUntil = performance.now() + RESIGN_CONFIRM_MS;
+      this.setStatus("再点一次「认输」确认结束对局", RESIGN_CONFIRM_MS);
+      this.syncResignButton();
+      return;
+    }
+    this.disarmResign();
+    const loser = this.mode === 0 ? BLACK : this.mode === 1 ? WHITE : this.state.player;
+    const epoch = ++this.epoch;
+    this.thinking = false;
+    this.deadline = null;
+    this.confirmIdx = null;
+    try {
+      const res = await this.engine.call<{ state: GameState }>("resign", { player: loser });
+      if (epoch !== this.epoch) return;
+      this.applyMove(this.state, res.state, null);
+    } catch (error) {
+      this.setStatus(`认输失败: ${errText(error)}`);
+    }
+  }
+
   private async onBoardClick(idx: number) {
     if (!this.ready || !this.state) return;
     if (this.review) {
@@ -501,6 +564,7 @@ export class App {
     this.thinking = false;
     this.deadline = null;
     this.confirmIdx = null;
+    this.disarmResign();
     try {
       let res = await this.engine.call<{ state: GameState }>("undo", {});
       if (epoch !== this.epoch) return;
@@ -527,6 +591,7 @@ export class App {
     this.pos = this.variation.length;
     this.divergence = null;
     this.reviewResult = this.state.result;
+    this.disarmResign();
     this.rebuildArrowStatic();
     if (overlay) {
       const text = this.state.is_draw
@@ -570,6 +635,8 @@ export class App {
     }
     this.pos = target;
     this.confirmIdx = null;
+    this.disarmResign();
+    const gotoResult = this.isDiverged() ? null : this.reviewResult;
     const epoch = ++this.epoch;
     this.thinking = false;
     this.deadline = null;
@@ -577,6 +644,7 @@ export class App {
       const res = await this.engine.call<{ state: GameState; pos: number }>("goto", {
         moves: this.variation,
         pos: target,
+        result: gotoResult,
       });
       if (epoch !== this.epoch) return;
       this.state = res.state;
@@ -645,6 +713,7 @@ export class App {
       this.reviewResult = res.result;
       this.arrow = null;
       this.confirmIdx = null;
+      this.disarmResign();
       this.rebuildArrowStatic();
       this.hideOverlay();
       this.setStatus(`已载入 ${res.state.moves.length} 手 [${res.result}] (${file.name})`);
@@ -738,6 +807,7 @@ export class App {
   }
 
   private updateClock() {
+    this.syncResignButton();
     const st = this.state;
     if (!st) return;
     const clock = $("clock");

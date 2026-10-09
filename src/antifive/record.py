@@ -6,7 +6,7 @@
 格式(UTF-8 纯文本):
     [AntiFive 1.0]                              # 格式版本
     [Config 15x15 white_restrict=2 loss_start=8 mask_suicide=1]
-    [Result 黑胜|白胜|和棋|未完]
+    [Result 黑胜|白胜|和棋|未完|黑认输|白认输]
     [Moves 34]                                  # 着法数(信息项,解析时忽略)
     moves:
     O5 O4 O7 A4 ...                             # 着法序列,'#' 后为注释
@@ -17,6 +17,8 @@
 着法坐标:列字母 A-O + 行数字 0-14,与 GUI 棋盘标注一致(O5 = 第 15 列第 6 行)。
 分析行格式:`手数 当前方胜率 最佳着法 [候选着法:胜率 ...]`(候选为 GTP 坐标:百分比)。
 解析容错:允许缺省 [Config]/[Result]/[Analysis] 头;非 '[' 开头的行均视为着法序列。
+认输局着法照常记录(棋盘上不出现五连),结果由 [Result 黑认输/白认输] 标识;
+载入/复盘到原谱末手时按该结果补标认输终局(见 resign_loser)。
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from .reversegomoku import (
 )
 
 FORMAT_TAG = "AntiFive 1.0"
-RESULT_NAMES = ("黑胜", "白胜", "和棋", "未完")
+RESULT_NAMES = ("黑胜", "白胜", "和棋", "未完", "黑认输", "白认输")
 
 
 def idx_to_coord(idx: int) -> str:
@@ -50,12 +52,23 @@ def coord_to_idx(token: str) -> int:
     return r * BOARD_SIZE + c
 
 
+def resign_loser(result: str) -> int:
+    """棋谱结果 → 认输方(BLACK/WHITE);非认输结果返回 0。"""
+    if result == "黑认输":
+        return BLACK
+    if result == "白认输":
+        return WHITE
+    return 0
+
+
 def game_result(game) -> str:
-    """终局 → 结果文本:黑胜/白胜/和棋/未完。"""
+    """终局 → 结果文本:黑胜/白胜/和棋/未完/黑认输/白认输。"""
     if not game.game_over:
         return "未完"
     if game.is_draw:
         return "和棋"
+    if getattr(game, "resigned", 0):
+        return "黑认输" if game.resigned == BLACK else "白认输"
     return "白胜" if game.loser == BLACK else "黑胜"
 
 

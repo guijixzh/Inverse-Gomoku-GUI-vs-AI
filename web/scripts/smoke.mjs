@@ -219,6 +219,37 @@ const afg = await page.evaluate(async () => {
 });
 check(afg.startsWith("[AntiFive 1.0]"), "export .afg");
 
+// 认输:二次确认(第一次点击只变红,点其他按钮取消,再点确认)
+await page.evaluate(() => {
+  const app = window.__antifive;
+  app.mode = 0;
+  app.newGame();
+});
+await wait(() => window.__antifive.state.move_count === 0 && !window.__antifive.review);
+await page.click('button[data-action="resign"]');
+const armed = await page.evaluate(() => ({
+  shown: window.__antifive.resignArmedShown,
+  over: window.__antifive.state.game_over,
+  text: document.querySelector('button[data-action="resign"]').textContent,
+}));
+check(armed.shown === true && !armed.over && armed.text === "确定？",
+  "resign first click arms only");
+await page.click('button[data-action="undo"]');
+await wait(() => window.__antifive.resignArmedShown === false);
+check(await page.$eval('button[data-action="resign"]', (b) => b.textContent === "认输"),
+  "clicking elsewhere disarms resign");
+await page.click('button[data-action="resign"]');
+await page.click('button[data-action="resign"]');
+await wait(() => window.__antifive.state.game_over === true);
+const resigned = await page.evaluate(() => ({
+  loser: window.__antifive.state.loser,
+  resigned: window.__antifive.state.resigned,
+  result: window.__antifive.state.result,
+  review: window.__antifive.review,
+}));
+check(resigned.loser === 1 && resigned.resigned === 1 &&
+  resigned.result === "黑认输" && resigned.review, "resign committed + review");
+
 await browser.close();
 server?.close();
 

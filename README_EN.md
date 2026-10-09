@@ -83,8 +83,8 @@ Play in the browser, no installation:
   Beginner 98% (96 games each).
 - Feature parity with the pygame GUI: place/capture/relocate, danger hints, move
   numbers, relocation arrows, helper rays, two-click move confirmation (on by
-  default), sounds, clocks, replay timeline with branch trials, `.afg`
-  import/export, and all four play modes.
+  default), human resignation (two-click confirm), sounds, clocks, replay
+  timeline with branch trials, `.afg` import/export, and all four play modes.
 - KataGo and the torch network cannot run in the browser; the web version ships
   the heuristic AI only.
 
@@ -228,6 +228,11 @@ If the default Python lacks dependencies, run
 | 1–4 | Human-Black / Human-White / Human-Human / AI-AI |
 | ← → | Review back / forward |
 | Esc | Quit |
+
+Left click: place / capture / relocate-phase placement. The `认输` (Resign)
+button near Undo (right of Undo in the web grid) ends the game for humans only
+(two-click confirm, disabled in AI-vs-AI; the AI has no resign logic) and
+records the result as `[Result 黑认输/白认输]`.
 
 ## Engines and Weights
 

@@ -25,6 +25,7 @@ export interface GameState {
   game_over: boolean;
   loser: number;
   is_draw: boolean;
+  resigned: number;
   winner: number;
   stuck: boolean;
   result: string;

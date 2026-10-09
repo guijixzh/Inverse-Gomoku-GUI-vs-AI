@@ -6,6 +6,9 @@
 - 落子确认:默认开启(棋盘下方「落子确认」按钮或 C 键开关),
   开启后同一位置第一次点击只固定虚影预览,再点同位置才执行,
   覆盖落子/占领/安置与复盘试下,防止误触
+- 认输:「悔棋」下方的「认输」按钮,仅人类可用(机机观战禁用);
+  首次点击按钮变红显示「确定?」,4 秒内再点确认,点其他位置取消;
+  认输后以认输方判负终局,棋谱结果记为 [Result 黑认输/白认输]
 - 按钮/快捷键: 1-4 切换模式, R 新局, U 悔棋, D 危险提示, N 棋子手数,
   A 移子箭头指示, H 辅助射线, C 落子确认, S 保存棋谱, L 读取棋谱,
   E 设定, Esc 退出;
@@ -114,10 +117,12 @@ COLOR_TARGET = (60, 200, 90)
 COLOR_LAST = (235, 70, 50)
 COLOR_ARROW = (45, 110, 230)
 COLOR_RAY = (140, 110, 230)          # 辅助射线(悬停棋子可移动位置)用色,区别于绿色落点/红色危险
+COLOR_RESIGN_ARMED = (210, 58, 46)   # 认输二次确认态:按钮变红,文字「确定？」
 
 ARROW_FLY_DURATION = 0.5         # 移子棋子飞行动画时长(秒),之后蓝色箭头保持显示
 RESULT_OVERLAY_HOLD = 2.0        # 终局大字蒙版完整显示时长(秒)
 RESULT_OVERLAY_FADE = 0.8        # 终局大字蒙版淡出时长(秒)
+RESIGN_CONFIRM_SECONDS = 4.0     # 认输二次确认窗口:首次点击后需在此时长内再点
 
 # 右上角固定位置读秒时钟框(不再悬浮于棋盘之上遮挡棋盘)
 CLOCK_RECT = pygame.Rect(BOARD_PX + 20, 14, PANEL_W - 40, 66)
@@ -419,16 +424,23 @@ class Board:
 class Panel:
     """右侧面板:模式/操作按钮 + 对局信息。"""
 
+    BTN_H = 38                     # 按钮高度(10 个按钮压缩间距,保证规则区不被顶出)
+    BTN_STEP = 50                  # 按钮纵向步进
+
     def __init__(self, font, font_xs):
         self.font = font
         self.font_xs = font_xs
         self.buttons = {}                      # name -> (rect, label)
         y = PANEL_BUTTON_TOP
         for name in ("设定", "人执黑", "人执白", "人人对战", "机机观战", "新局", "悔棋",
-                     "保存棋谱", "读取棋谱"):
-            rect = pygame.Rect(BOARD_PX + 30, y, PANEL_W - 60, 44)
+                     "认输", "保存棋谱", "读取棋谱"):
+            rect = pygame.Rect(BOARD_PX + 30, y, PANEL_W - 60, self.BTN_H)
             self.buttons[name] = (rect, name)
-            y += 56
+            y += self.BTN_STEP
+
+    def bottom(self) -> int:
+        """按钮区底边 y(供规则讲解定位,不依赖按钮数量/间距)。"""
+        return max(r.bottom for r, _ in self.buttons.values())
 
     def hit(self, pos):
         for name, (rect, _) in self.buttons.items():
@@ -436,7 +448,7 @@ class Panel:
                 return name
         return None
 
-    def draw(self, screen, mode, vmouse=None):
+    def draw(self, screen, mode, vmouse=None, resign_armed=False):
         pygame.draw.rect(screen, COLOR_PANEL,
                          (BOARD_PX, 0, PANEL_W, WIN_H))
         pygame.draw.line(screen, COLOR_WOOD_DARK, (BOARD_PX, 0), (BOARD_PX, WIN_H), 2)
@@ -444,10 +456,15 @@ class Panel:
         for name, (rect, _) in self.buttons.items():
             hover = rect.collidepoint(mouse)
             act = (name == MODE_NAMES[mode])
-            color = COLOR_BTN_ACT if act else (COLOR_BTN_HOVER if hover else COLOR_BTN)
+            armed = (name == "认输" and resign_armed)
+            if armed:
+                color = COLOR_RESIGN_ARMED
+            else:
+                color = COLOR_BTN_ACT if act else (COLOR_BTN_HOVER if hover else COLOR_BTN)
             pygame.draw.rect(screen, color, rect, border_radius=10)
             pygame.draw.rect(screen, COLOR_WOOD_DARK, rect, 2, border_radius=10)
-            label = self.font.render(name, True, COLOR_TEXT)
+            label = self.font.render("确定？" if armed else name, True,
+                                     (255, 255, 255) if armed else COLOR_TEXT)
             screen.blit(label, (rect.centerx - label.get_width() // 2,
                                 rect.centery - label.get_height() // 2))
         # ---- 右下角署名(固定,快捷键提示已统一移至棋盘下方) ----
@@ -1507,6 +1524,7 @@ class App:
         self.show_rays = True            # 辅助射线:悬停棋子临时显示其可移动位置
         self.confirm_move = True         # 落子确认:点一下固定虚影,再点同位置才执行
         self.confirm_idx = None          # 当前固定的虚影位置(未固定为 None)
+        self.resign_armed_until = 0.0    # 认输二次确认截止时间(0=未武装)
         self.arrow_anim = None           # (占领idx, 安置idx, 飞行起始时间|None=静态保持)
         self.toggle_btns: list = []      # 底部开关按钮 (rect, label, fn)
         self.ai_lock = threading.Lock()
@@ -1792,6 +1810,10 @@ class App:
             if rec.config != self.game.config:
                 # 规则配置不同:重建引擎,避免 AI 用错规则继续行棋
                 self._rebuild_engines(rec.config)
+            if not g.game_over:              # 认输局棋盘无五连,按原谱结果补标终局
+                loser = record.resign_loser(rec.result)
+                if loser:
+                    g.resign(loser)
             self.game = g
             self.epoch += 1
             self.show_result_overlay = False
@@ -1826,6 +1848,7 @@ class App:
         self.review = False
         self.arrow_anim = None
         self.confirm_idx = None
+        self.resign_armed_until = 0.0
         self.show_result_overlay = False
         self.game = ReverseGomoku()
 
@@ -1837,6 +1860,7 @@ class App:
             self.ai_result = None
         self.epoch += 1
         self.confirm_idx = None
+        self.resign_armed_until = 0.0
         if not self.game.history:
             return
         if self.game.pending >= 0:
@@ -1848,6 +1872,62 @@ class App:
             if not is_ai_turn(self.mode, self.game):
                 break
         self._mark_move_arrow(False)
+
+    def resign(self):
+        """认输(仅人类):首次点击进入确认态(按钮变红「确定?」),
+        4 秒内再点同一按钮才生效;点其他位置/超时自动取消。AI 不参与认输。"""
+        if self.game.game_over or self.review:
+            self.resign_armed_until = 0.0
+            return
+        if self.mode == 3:
+            self.resign_armed_until = 0.0
+            self.set_status("机机观战模式无需认输")
+            return
+        if time.time() >= self.resign_armed_until:
+            self.resign_armed_until = time.time() + RESIGN_CONFIRM_SECONDS
+            self.set_status("再点一次「认输」确认结束对局", RESIGN_CONFIRM_SECONDS)
+            return
+        self.resign_armed_until = 0.0
+        loser = MODE_HUMAN.get(self.mode)
+        if loser not in (BLACK, WHITE):
+            loser = self.game.current_player      # 人人对战:当前行棋方认输
+        with self.ai_lock:
+            self.ai_result = None
+        self.epoch += 1                           # 作废进行中的 AI 搜索结果
+        self.confirm_idx = None
+        self.game.resign(loser)
+        which = "黑" if loser == BLACK else "白"
+        self.set_status(f"{which}方认输 · 对局结束", 30.0)
+        self.enter_review(True)
+
+    def _on_left_click(self, vpos) -> None:
+        """左键点击分发:时钟/底部工具条/右侧面板/棋盘;点非「认输」位置取消认输确认。"""
+        name = self.panel.hit(vpos)
+        if name != "认输":
+            self.resign_armed_until = 0.0          # 点其他位置取消认输确认
+        if CLOCK_RECT.collidepoint(vpos):
+            self._toggle_limit_mode()              # 点右上角时钟开关读秒
+            return
+        if vpos[0] < BOARD_PX and vpos[1] > BOARD_PX:
+            self._bottom_click(vpos)               # 底部工具条
+            return
+        if name in MODE_NAMES:
+            self.mode = MODE_NAMES.index(name)
+            self.new_game()
+        elif name == "新局":
+            self.new_game()
+        elif name == "悔棋":
+            self.undo()
+        elif name == "认输":
+            self.resign()
+        elif name == "设定":
+            self._open_settings()
+        elif name == "保存棋谱":
+            self.save_game()
+        elif name == "读取棋谱":
+            self.load_game()
+        else:
+            self.click(vpos)
 
     def _map_pos(self, pos):
         """实际窗口坐标 → 虚拟画布坐标"""
@@ -1907,6 +1987,7 @@ class App:
         self.result_shown_at = 0.0
         self.show_result_overlay = overlay
         self.confirm_idx = None
+        self.resign_armed_until = 0.0
         self._mark_move_arrow(False)
 
     def review_jump(self, k: int) -> None:
@@ -1916,9 +1997,15 @@ class App:
             self.ai_result = None
         self.epoch += 1
         self.confirm_idx = None
+        self.resign_armed_until = 0.0
         g = ReverseGomoku(self.game.config)
         for m in self.moves[:self.pos]:
             g.make_move(m)
+        if self.pos == len(self.moves) and self.moves == self.record_moves:
+            # 认输局棋盘无五连:原谱末手按原谱结果补标终局(试下分支不补标)
+            loser = record.resign_loser(self.review_result)
+            if loser and not g.game_over:
+                g.resign(loser)
         self.game = g
         self.result_shown_at = 0.0
         self.arrow_anim = None                       # 跳转后按新局面重建箭头
@@ -2217,29 +2304,7 @@ class App:
                         self.mode = int(k) - 1
                         self.new_game()
                 elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                    vpos = self._map_pos(ev.pos)
-                    if CLOCK_RECT.collidepoint(vpos):
-                        self._toggle_limit_mode()          # 点右上角时钟开关读秒
-                        continue
-                    if vpos[0] < BOARD_PX and vpos[1] > BOARD_PX:
-                        self._bottom_click(vpos)           # 底部工具条
-                        continue
-                    name = self.panel.hit(vpos)
-                    if name in MODE_NAMES:
-                        self.mode = MODE_NAMES.index(name)
-                        self.new_game()
-                    elif name == "新局":
-                        self.new_game()
-                    elif name == "悔棋":
-                        self.undo()
-                    elif name == "设定":
-                        self._open_settings()
-                    elif name == "保存棋谱":
-                        self.save_game()
-                    elif name == "读取棋谱":
-                        self.load_game()
-                    else:
-                        self.click(vpos)
+                    self._on_left_click(self._map_pos(ev.pos))
                 elif ev.type == pygame.MOUSEMOTION:
                     self.hover = self.board.screen_to_cell(*self._map_pos(ev.pos))
 
@@ -2382,7 +2447,8 @@ class App:
                 text.set_alpha(int(255 * k))
                 self.screen.blit(text, (center[0] - text.get_width() // 2,
                                         center[1] - text.get_height() // 2))
-        self.panel.draw(self.screen, self.mode, self._vmouse)
+        self.panel.draw(self.screen, self.mode, self._vmouse,
+                        resign_armed=time.time() < self.resign_armed_until)
         self._draw_settings_summary()
         self._draw_notify()
         self._draw_clock()
@@ -2528,8 +2594,8 @@ class App:
         return lines
 
     def _draw_rules(self) -> None:
-        """右侧面板原状态栏位置固定规则讲解(横排自动换行)。"""
-        x, y = BOARD_PX + 24, PANEL_BUTTON_TOP + len(self.panel.buttons) * 56 + 14
+        """右侧面板原状态栏位置固定规则讲解(横排自动换行,按按钮区底边定位)。"""
+        x, y = BOARD_PX + 24, self.panel.bottom() + 14
         max_w = PANEL_W - 48
         for item in self._RULES:
             for line in self._wrap_text(self.font_xs, item, max_w):

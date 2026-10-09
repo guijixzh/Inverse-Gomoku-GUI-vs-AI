@@ -1,7 +1,7 @@
 """纯 numpy 引擎冒烟测试(不依赖 torch / pygame)。
 
 覆盖:初始状态、落子与回合推进、移子(占领 + 安置)、安置路径约束、
-白棋前 N 回合禁占领、连五判负、随机自对弈不变量、5 通道编码、
+白棋前 N 回合禁占领、连五判负、人类认输结果编码、随机自对弈不变量、5 通道编码、
 .afg 棋谱读写往返。
 
 无 torch 环境也可完整运行,保证轻量用户与 CI 能验证核心规则。
@@ -111,6 +111,25 @@ def test_five_in_row_loses():
     assert g.game_over and not g.is_draw
     assert g.loser == BLACK                      # 连五者判负:黑棋输,白胜
     assert record.game_result(g) == "白胜"
+
+
+def test_resign_and_record_result():
+    """人类认输:终局字段、棋谱结果编码与 resign_loser 解析。"""
+    g = ReverseGomoku()
+    g.make_move(_place(7, 7))
+    g.resign(BLACK)                              # 黑方认输
+    assert g.game_over and not g.is_draw
+    assert g.loser == BLACK and g.resigned == BLACK
+    assert record.game_result(g) == "黑认输"
+    assert record.resign_loser("白认输") == WHITE
+    assert record.resign_loser("黑胜") == 0
+    text = record.dumps(g.record(), g.config, record.game_result(g))
+    rec = record.loads(text)
+    assert rec.result == "黑认输" and rec.moves == g.record()
+    g2 = g.copy()                                # copy 保留认输标记
+    assert g2.resigned == BLACK and g2.game_over
+    g.undo_move()                                # 悔棋清除认输终局
+    assert not g.game_over and g.loser == 0 and g.resigned == 0
 
 
 # ---------------------------------------------------------------- 随机对局

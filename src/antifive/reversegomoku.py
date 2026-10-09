@@ -338,6 +338,7 @@ class ReverseGomoku:
         self.game_over = False
         self.loser = 0                 # 0=未分胜负(或和棋), BLACK/WHITE = 连五判负方
         self.is_draw = False
+        self.resigned = 0              # 0=非认输终局, BLACK/WHITE = 认输方(仅人类 UI 使用)
         self.move_count = 0            # 步数(移子占 2 步)
         self.turn_count = 0            # 回合数
         self.white_turns = 0           # 白棋已完成的回合数
@@ -522,8 +523,20 @@ class ReverseGomoku:
         self.game_over = False
         self.loser = 0
         self.is_draw = False
+        self.resigned = 0
         self.move_count -= 1
         return True
+
+    def resign(self, player: int = 0) -> None:
+        """人类认输:player 为认输方(BLACK/WHITE),0=当前行棋方。
+        仅 GUI/网页的人类操作调用,AI 与引擎搜索不使用。"""
+        if self.game_over:
+            return
+        if player not in (BLACK, WHITE):
+            player = self.current_player
+        self.game_over = True
+        self.loser = player
+        self.resigned = player
 
     def is_suicide_move(self, move) -> bool:
         """执行该步是否会使己方连五判负(真实模拟,精确)。"""
@@ -589,6 +602,7 @@ class ReverseGomoku:
         g.game_over = self.game_over
         g.loser = self.loser
         g.is_draw = self.is_draw
+        g.resigned = self.resigned
         g.move_count = self.move_count
         g.turn_count = self.turn_count
         g.white_turns = self.white_turns

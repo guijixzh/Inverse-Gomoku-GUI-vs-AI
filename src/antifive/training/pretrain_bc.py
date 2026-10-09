@@ -49,7 +49,8 @@ def collect_examples(records_dir: str, use_tactics: bool = True,
         except Exception:
             continue
         g = ReverseGomoku(rec.config)
-        winner = {"黑胜": BLACK, "白胜": WHITE}.get(rec.result, 0)
+        winner = {"黑胜": BLACK, "白胜": WHITE,
+                  "黑认输": WHITE, "白认输": BLACK}.get(rec.result, 0)
         w_sgn = 1 if winner == BLACK else (-1 if winner == WHITE else 0)
         ok = True
         for m in rec.moves:

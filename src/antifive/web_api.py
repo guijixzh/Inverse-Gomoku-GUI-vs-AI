@@ -13,6 +13,7 @@ Web Worker 中的 JS 侧只做两件事:
 - {"cmd": "state"}                                     当前状态
 - {"cmd": "move", "idx": n, "allow_suicide": bool}     走一步(落子/占领/安置)
 - {"cmd": "undo"}                                      悔一步
+- {"cmd": "resign", "player": 1|2 可选}                人类认输(默认当前行棋方)
 - {"cmd": "ai", "depth": 2|4|8, "budget": sec,
    "engine": "beginner"|"mid"|"advanced", "vcf": bool}
                                                        AI 走一步(默认高级+VCF;
@@ -22,7 +23,9 @@ Web Worker 中的 JS 侧只做两件事:
    "engine": "beginner"|"mid"|"advanced", "vcf": bool} 提示:候选着法与价值
 - {"cmd": "export", "moves": [..]}                     导出 .afg 文本
 - {"cmd": "import", "text": "..."}                     读取 .afg 文本
-- {"cmd": "goto", "moves": [..], "pos": k}             复盘跳转:按变化线重建到第 k 手
+- {"cmd": "goto", "moves": [..], "pos": k, "result": s}
+                                                       复盘跳转:按变化线重建到第 k 手
+                                                       (result 为原谱结果,末手补标认输)
 - {"cmd": "stuck"}                                     无子可走时替胜方走出绝杀并终局
 
 响应统一为 {"ok": true, ...} 或 {"ok": false, "error": "..."}。
@@ -128,6 +131,7 @@ def _state(sess: _Session) -> dict:
         "game_over": bool(g.game_over),
         "loser": int(g.loser),
         "is_draw": bool(g.is_draw),
+        "resigned": int(getattr(g, "resigned", 0)),
         "winner": int(winner),
         "stuck": bool(legal.size == 0 and np.any(g.board == 0)),
         "result": record_mod.game_result(g),
@@ -203,6 +207,15 @@ def _cmd_undo(sess: _Session, req: dict) -> dict:
     if not sess.game.history:
         raise ValueError("没有可悔的着法")
     sess.game.undo_move()
+    return {"state": _state(sess)}
+
+
+def _cmd_resign(sess: _Session, req: dict) -> dict:
+    """人类认输:player 可选(BLACK/WHITE),缺省为当前行棋方;AI 不调用。"""
+    g = sess.game
+    if g.game_over:
+        raise ValueError("对局已结束")
+    g.resign(int(req.get("player", 0) or 0))
     return {"state": _state(sess)}
 
 
@@ -301,6 +314,10 @@ def _cmd_import(sess: _Session, req: dict) -> dict:
         if not mask.any():
             break
         g.make_move(int(m))
+    if not g.game_over:                    # 认输局无五连,按原谱结果补标终局
+        loser = record_mod.resign_loser(rec.result)
+        if loser:
+            g.resign(loser)
     sess.game = g
     sess.last_nodes = 0
     sess.last_elapsed = 0.0
@@ -312,7 +329,8 @@ def _cmd_state(sess: _Session, req: dict) -> dict:
 
 
 def _cmd_goto(sess: _Session, req: dict) -> dict:
-    """复盘跳转:用给定变化线前面 pos 手从零重建局面(与 GUI review_jump 一致)。"""
+    """复盘跳转:用给定变化线前面 pos 手从零重建局面(与 GUI review_jump 一致)。
+    result 可选(原谱结果):跳到末手且为认输局时补标认输终局。"""
     moves = [int(m) for m in req.get("moves", [])]
     pos = int(req.get("pos", len(moves)))
     pos = max(0, min(pos, len(moves)))
@@ -324,6 +342,10 @@ def _cmd_goto(sess: _Session, req: dict) -> dict:
         if not mask[m]:
             raise ValueError(f"变化线第 {len(g.history) + 1} 手非法")
         g.make_move(m)
+    if pos == len(moves):
+        loser = record_mod.resign_loser(str(req.get("result") or ""))
+        if loser and not g.game_over:
+            g.resign(loser)                # 认输局末手:按原谱结果恢复终局
     sess.game = g
     sess.last_nodes = 0
     sess.last_elapsed = 0.0
@@ -334,6 +356,7 @@ _COMMANDS = {
     "new": _cmd_new,
     "move": _cmd_move,
     "undo": _cmd_undo,
+    "resign": _cmd_resign,
     "ai": _cmd_ai,
     "rays": _cmd_rays,
     "hint": _cmd_hint,
