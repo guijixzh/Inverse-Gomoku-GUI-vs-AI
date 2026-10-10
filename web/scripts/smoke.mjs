@@ -135,11 +135,14 @@ check(initial.player === 1 && initial.count === 0 && initial.legal === 225, "ini
 const defaults = await page.evaluate(() => ({
   tier: window.__antifive.tier,
   limit: window.__antifive.limitSeconds,
+  mode: window.__antifive.limitMode,
+  infoLimit: document.getElementById("info-limit").textContent,
   param: document.getElementById("info-param").textContent,
 }));
-check(defaults.tier === 2 && defaults.limit === 12 &&
+check(defaults.tier === 2 && defaults.limit === 12 && defaults.mode === "none" &&
+  defaults.infoLimit === "不限时" &&
   defaults.param === "高级·VCF开 · 深度 8 层",
-  "default advanced+VCF / depth 8 / 12s");
+  "default advanced+VCF / depth 8 / 不限时");
 
 await page.keyboard.press("e");
 await page.click('input[name="limit"][value="ai"]');

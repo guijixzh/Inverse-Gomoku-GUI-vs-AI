@@ -96,6 +96,17 @@ def test_ai_moves_and_progress():
     assert resp["nodes"] > 0 and seen
 
 
+def test_ai_accepts_null_budget():
+    """budget=None(不限时)走无时限搜索路径,仍应返回合法着法。"""
+    _call(cmd="new")
+    _call(cmd="move", idx=112)           # 避开开局库
+    _call(cmd="move", idx=113)
+    resp = _call(cmd="ai", depth=2, budget=None)
+    st = resp["state"]
+    assert resp["move"] is not None and st["board"][resp["move"]] != 0
+    assert st["move_count"] == 3
+
+
 def test_hint_candidates():
     _call(cmd="new")
     _call(cmd="move", idx=112)

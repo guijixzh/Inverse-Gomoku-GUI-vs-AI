@@ -74,8 +74,10 @@ Play in the browser, no installation:
   GitHub Pages.
 - The first visit downloads the runtime (about 10-20 MB); later visits are served
   from a Service Worker cache. Three difficulty tiers map to heuristic depths
-  2 / 4 / 8 with a per-move time budget; the default "Hard" tier is depth 8 with
-  a 12s clock, matching the desktop default.
+  2 / 4 / 8 (iterative deepening; on timeout the last completed depth is used).
+  The default limit mode is "no clock" (full-depth search, with a 180s/move
+  safety cap in the browser; the desktop build has no cap); "AI clock" caps each
+  AI move at a custom number of seconds.
 - The settings dialog offers an **engine version** switch (Beginner classic /
   Mid enhanced / Advanced + distillation) and a **VCF forced-kill-chain** toggle
   (Mid/Advanced only); the default is Advanced + VCF on (strongest). Equal-time

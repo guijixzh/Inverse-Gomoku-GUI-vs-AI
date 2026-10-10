@@ -6,10 +6,14 @@ import { BLACK, BOARD_SIZE, EMPTY, WHITE } from "./types";
 import type { AiResult, GameState } from "./types";
 
 const TIERS = [
-  { name: "简单", depth: 2, budget: 1.5 },
-  { name: "中等", depth: 4, budget: 5 },
-  { name: "困难", depth: 8, budget: 12 },
+  { name: "简单", depth: 2 },
+  { name: "中等", depth: 4 },
+  { name: "困难", depth: 8 },
 ] as const;
+
+// 「不限时」下 AI 的兜底上限(秒):防浏览器端完整深度搜索卡死(Pyodide 无抢占);
+// 引擎到点会中止并返回上一层完整结果。桌面 `--limit none` 无此上限。
+const NO_LIMIT_FALLBACK_SECONDS = 180;
 
 const VERSION_LABELS: Record<string, string> = {
   beginner: "初级", mid: "中级", advanced: "高级",
@@ -476,7 +480,7 @@ export class App {
   private async runAi(retry = 0) {
     const epoch = this.epoch;
     const tier = TIERS[this.tier];
-    const budget = this.limitMode === "ai" ? this.limitSeconds : tier.budget;
+    const budget = this.limitMode === "ai" ? this.limitSeconds : NO_LIMIT_FALLBACK_SECONDS;
     const prev = this.state;
     if (!prev) return;
     this.thinking = true;
