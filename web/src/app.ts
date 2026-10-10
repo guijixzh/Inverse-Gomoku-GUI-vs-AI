@@ -78,6 +78,7 @@ export class App {
   private aiRedoArmed = false;
   private aiRedoEpoch = 0;
   private dprCheckedAt = 0;
+  private undoBusy = false;
 
   private review = false;
   private recordMoves: number[] = [];
@@ -451,9 +452,11 @@ export class App {
     this.syncPanel();
     this.needsDraw = true;
     if (this.state?.stuck && !this.state.game_over && !this.review) {
+      const epoch = this.epoch;
       this.engine
         .call<{ state: GameState }>("stuck", {})
         .then((res) => {
+          if (epoch !== this.epoch) return;
           this.state = res.state;
           this.syncPanel();
           this.needsDraw = true;
@@ -658,11 +661,17 @@ export class App {
       return;
     }
     if (!this.state.moves.length) return;
+    // 悔棋链必须独占:AI 思考中重复点击会让多条悔棋链交叉,被 epoch 丢弃的
+    // 响应会让引擎(Python)继续回滚而界面状态停在半路,造成棋盘与引擎错位
+    if (this.undoBusy) return;
+    this.undoBusy = true;
+    const wasThinking = this.thinking;
     const epoch = ++this.epoch;
     this.thinking = false;
     this.deadline = null;
     this.confirmIdx = null;
     this.disarmResign();
+    if (wasThinking) this.setStatus("悔棋中…(等待 AI 结束)", 8000);
     try {
       let res = await this.engine.call<{ state: GameState }>("undo", {});
       if (epoch !== this.epoch) return;
@@ -677,7 +686,9 @@ export class App {
       this.hideOverlay();
       this.afterStateChange();
     } catch (error) {
-      this.setStatus(`悔棋失败: ${errText(error)}`);
+      if (epoch === this.epoch) this.setStatus(`悔棋失败: ${errText(error)}`);
+    } finally {
+      this.undoBusy = false;
     }
   }
 
