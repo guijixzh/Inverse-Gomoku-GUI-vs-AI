@@ -28,6 +28,7 @@ type WebApi = {
 
 type Runtime = {
   loadPyodide: (options: { indexURL: string }) => Promise<PyodideInterface>;
+  setInterruptBuffer?: (buffer: Int32Array) => void;
 };
 
 type Source = {
@@ -38,6 +39,8 @@ type Source = {
 
 let py: PyodideInterface | null = null;
 let mod: WebApi | null = null;
+let runtimeModule: Runtime | null = null;
+let interruptBuffer: Int32Array | null = null;
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -163,11 +166,13 @@ async function loadRuntime(base: string): Promise<PyodideInterface> {
         IMPORT_TIMEOUT_MS,
         `${source.name} 模块`,
       );
-      return await withTimeout(
+      const instance = await withTimeout(
         module.loadPyodide({ indexURL: source.indexURL }),
         RUNTIME_TIMEOUT_MS,
         `${source.name} 运行时`,
       );
+      runtimeModule = module;
+      return instance;
     } catch (error) {
       lastError = error;
       status("fallback", `${source.name}: ${errText(error)}`);
@@ -215,9 +220,27 @@ async function loadNumpy(base: string) {
   throw new Error(`numpy 加载失败(${notes.join("; ")})`);
 }
 
+function enableInterrupts() {
+  if (!interruptBuffer || !py) return;
+  const api = py as unknown as { setInterruptBuffer?: (buffer: Int32Array) => void };
+  const fn = typeof api.setInterruptBuffer === "function"
+    ? api.setInterruptBuffer.bind(api)
+    : runtimeModule?.setInterruptBuffer?.bind(runtimeModule);
+  if (!fn) {
+    interruptBuffer = null;
+    return;
+  }
+  try {
+    fn(interruptBuffer);
+  } catch {
+    interruptBuffer = null;   // 运行时不支持:退化为不可中断
+  }
+}
+
 async function boot(base: string) {
   status("core");
   py = await loadRuntime(base);
+  enableInterrupts();
   status("numpy");
   await loadNumpy(base);
   status("engine");
@@ -238,9 +261,11 @@ ctx.onmessage = async (event: MessageEvent) => {
   const msg = event.data;
   try {
     if (msg.type === "init") {
+      if (msg.interruptBuffer) interruptBuffer = new Int32Array(msg.interruptBuffer);
       await boot(new URL(msg.base, ctx.location.origin).href);
     } else if (msg.type === "call") {
       if (!mod) throw new Error("引擎尚未就绪");
+      if (interruptBuffer) Atomics.store(interruptBuffer, 0, 0);   // 清除过期中断信号
       const value = JSON.parse(mod.handle(JSON.stringify({ cmd: msg.cmd, ...msg.payload })));
       if (!value.ok) throw new Error(value.error);
       ctx.postMessage({ type: "result", id: msg.id, ok: true, value });

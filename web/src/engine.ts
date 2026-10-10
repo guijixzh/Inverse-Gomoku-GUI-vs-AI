@@ -15,6 +15,7 @@ export class Engine {
   private readyReject!: (error: Error) => void;
   private settled = false;
   private dead = false;
+  private interruptBuffer: Int32Array | null = null;
 
   readonly ready: Promise<void>;
   onProgress: ((nodes: number) => void) | null = null;
@@ -28,6 +29,14 @@ export class Engine {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
+    const isolated = (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
+    if (isolated && typeof SharedArrayBuffer !== "undefined") {
+      try {
+        this.interruptBuffer = new Int32Array(new SharedArrayBuffer(4));
+      } catch {
+        this.interruptBuffer = null;
+      }
+    }
     this.worker.onmessage = (event: MessageEvent) => {
       const msg = event.data;
       if (msg.type === "ready") {
@@ -56,7 +65,21 @@ export class Engine {
     this.worker.onmessageerror = () => {
       this.fail(new Error("引擎 Worker 消息解码失败"));
     };
-    this.worker.postMessage({ type: "init", base });
+    this.worker.postMessage({
+      type: "init",
+      base,
+      interruptBuffer: this.interruptBuffer?.buffer ?? null,
+    });
+  }
+
+  get canInterrupt(): boolean {
+    return this.interruptBuffer !== null;
+  }
+
+  /** 中断 Worker 中正在执行的 Python 搜索(需跨源隔离 + SharedArrayBuffer)。 */
+  interrupt(): void {
+    if (!this.interruptBuffer) return;
+    Atomics.store(this.interruptBuffer, 0, 2);   // SIGINT → KeyboardInterrupt
   }
 
   private fail(error: Error) {

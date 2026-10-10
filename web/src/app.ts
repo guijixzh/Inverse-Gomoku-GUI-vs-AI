@@ -83,6 +83,7 @@ export class App {
   private aiRedoEpoch = 0;
   private dprCheckedAt = 0;
   private undoBusy = false;
+  private humanPrevState: GameState | null = null;
 
   private review = false;
   private recordMoves: number[] = [];
@@ -420,20 +421,26 @@ export class App {
     this.needsDraw = true;
   }
 
-  private isAiTurn(): boolean {
-    if (!this.state) return false;
-    if (this.mode === 0) return this.state.player === WHITE;
-    if (this.mode === 1) return this.state.player === BLACK;
+  private isAiTurnState(st: GameState): boolean {
+    if (this.mode === 0) return st.player === WHITE;
+    if (this.mode === 1) return st.player === BLACK;
     if (this.mode === 3) return true;
     return false;
   }
 
+  private isAiTurn(): boolean {
+    if (!this.state) return false;
+    return this.isAiTurnState(this.state);
+  }
+
   private newGame() {
     if (!this.ready) return;
+    this.engine.interrupt();     // 正在搜索的 AI 立即中断,避免新局排队等待
     this.epoch++;
     this.thinking = false;
     this.deadline = null;
     this.nodes = 0;
+    this.humanPrevState = null;
     this.review = false;
     this.recordMoves = [];
     this.variation = [];
@@ -472,7 +479,7 @@ export class App {
 
   private maybeRunAi() {
     if (!this.ready || this.review || !this.state || this.state.game_over) return;
-    if (!this.isAiTurn() || this.thinking) return;
+    if (!this.isAiTurn() || this.thinking || this.undoBusy) return;
     if (document.hidden) return;   // 切屏时先不启动,回到前台再思考(避免预算被挂起空烧)
     void this.runAi();
   }
@@ -623,6 +630,7 @@ export class App {
     this.disarmResign();
     const loser = this.mode === 0 ? BLACK : this.mode === 1 ? WHITE : this.state.player;
     const epoch = ++this.epoch;
+    this.engine.interrupt();     // 认输也要等 Worker 空闲,先中断在跑的搜索
     this.thinking = false;
     this.deadline = null;
     this.confirmIdx = null;
@@ -648,6 +656,7 @@ export class App {
     }
     if (!this.confirmGate(idx)) return;
     const prev = this.state;
+    this.humanPrevState = prev;      // 悔棋乐观回退用:人类上一手之前的局面
     const epoch = ++this.epoch;
     try {
       const res = await this.engine.call<{ state: GameState }>("move", { idx });
@@ -671,29 +680,64 @@ export class App {
     this.undoBusy = true;
     const wasThinking = this.thinking;
     const epoch = ++this.epoch;
-    this.thinking = false;
-    this.deadline = null;
+    // 不立即清 thinking:AI 搜索仍在 Worker 里跑,清掉会让 visibilitychange /
+    // afterStateChange 触发 maybeRunAi 排入新的 AI 调用,悔棋链与 AI 互相排队,
+    // 棋盘长时间不回落(切屏回来还会"重新思考")。等链执行完再统一收尾。
     this.confirmIdx = null;
     this.disarmResign();
-    if (wasThinking) this.setStatus("悔棋中…(等待 AI 结束)", 8000);
+    if (wasThinking) {
+      this.engine.interrupt();   // 立即中断 Worker 中的 AI 搜索(跨源隔离时可用)
+      this.setStatus("悔棋中…(等待 AI 结束)", 8000);
+      // 乐观回退:AI 搜索在 Worker 里无法打断(单线程 WASM),先把界面显示
+      // 恢复到人类上一手之前,避免棋盘长时间不动(切屏回来也不受影响);
+      // 引擎搜索结束后再由悔棋链的结果对齐。
+      const snap = this.humanPrevState;
+      if (snap && !snap.game_over && snap.moves.length + 1 === this.state.moves.length) {
+        this.state = snap;
+        this.arrow = null;
+        this.rebuildArrowStatic();
+        this.needsDraw = true;
+        this.syncPanel();
+      }
+    }
+    let ok = false;
     try {
       let res = await this.engine.call<{ state: GameState }>("undo", {});
       if (epoch !== this.epoch) return;
-      this.state = res.state;
-      while (this.state.moves.length > 0 && this.isAiTurn() && !this.state.game_over) {
+      let st: GameState = res.state;
+      while (st.moves.length > 0 && this.isAiTurnState(st) && !st.game_over) {
         res = await this.engine.call<{ state: GameState }>("undo", {});
         if (epoch !== this.epoch) return;
-        this.state = res.state;
+        st = res.state;
       }
-      this.arrow = null;
-      this.rebuildArrowStatic();
-      this.hideOverlay();
-      this.afterStateChange();
+      this.state = st;
+      ok = true;
     } catch (error) {
-      if (epoch === this.epoch) this.setStatus(`悔棋失败: ${errText(error)}`);
+      if (epoch === this.epoch) {
+        this.setStatus(`悔棋失败: ${errText(error)}`);
+        try {
+          const s = await this.engine.call<{ state: GameState }>("state", {});
+          if (epoch === this.epoch) {
+            this.state = s.state;
+            this.needsDraw = true;
+            this.syncPanel();
+          }
+        } catch {
+          // 引擎不可用时保持现状
+        }
+      }
     } finally {
+      if (epoch === this.epoch) {
+        this.thinking = false;
+        this.deadline = null;
+      }
       this.undoBusy = false;
     }
+    if (!ok || epoch !== this.epoch) return;
+    this.arrow = null;
+    this.rebuildArrowStatic();
+    this.hideOverlay();
+    this.afterStateChange();
   }
 
   private enterReview(overlay: boolean) {
@@ -814,9 +858,11 @@ export class App {
   private async importRecord(file: File) {
     try {
       const text = await file.text();
+      this.engine.interrupt();   // 读取棋谱会替换整局,先中断在跑的搜索
       const res = await this.engine.call<{ state: GameState; result: string }>("import", { text });
       this.epoch++;
       this.thinking = false;
+      this.humanPrevState = null;
       this.state = res.state;
       this.review = true;
       this.recordMoves = [...res.state.moves];

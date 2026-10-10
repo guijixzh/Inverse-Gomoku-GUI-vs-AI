@@ -124,6 +124,8 @@ check(visibilityRedraw, "visibilitychange redraws board");
 
 await wait(async () => (await navigator.serviceWorker.getRegistrations()).length > 0, 15000, 200);
 check(true, "service worker registered");
+check(await page.evaluate(() => window.crossOriginIsolated === true),
+  "cross-origin isolated (SharedArrayBuffer)");
 
 const initial = await page.evaluate(() => ({
   player: window.__antifive.state.player,
@@ -243,6 +245,29 @@ const afg = await page.evaluate(async () => {
   return res.text;
 });
 check(afg.startsWith("[AntiFive 1.0]"), "export .afg");
+
+// 引擎中断:跨源隔离下 SharedArrayBuffer 应能中止正在搜索的 AI(悔棋即时生效)
+check(await page.evaluate(() => window.__antifive.engine.canInterrupt), "engine interrupt available");
+const interrupt = await page.evaluate(async () => {
+  const app = window.__antifive;
+  await app.engine.call("new", {});
+  for (const idx of [112, 52, 172, 34, 190, 76]) {
+    await app.engine.call("move", { idx });
+  }
+  const t0 = performance.now();
+  const p = app.engine.call("ai", { depth: 8, budget: 60, engine: "advanced", vcf: true }, 120000);
+  await new Promise((r) => setTimeout(r, 1500));
+  const nodes = app.nodes;
+  app.engine.interrupt();
+  try {
+    await p;
+    return { ok: false, ms: performance.now() - t0, nodes };
+  } catch {
+    return { ok: true, ms: performance.now() - t0, nodes };
+  }
+});
+check(interrupt.ok && interrupt.ms < 8000,
+  `engine interrupt aborts AI search (${Math.round(interrupt.ms)}ms, nodes=${interrupt.nodes})`);
 
 // 认输:二次确认(第一次点击只变红,点其他按钮取消,再点确认)
 await page.evaluate(() => {
