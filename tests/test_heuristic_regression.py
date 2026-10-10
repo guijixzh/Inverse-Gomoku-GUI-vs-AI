@@ -224,3 +224,66 @@ def test_load_params_whitelist(tmp_path):
         for k, v in old.items():
             setattr(h, k, v)
     assert h.load_params(tmp_path / "missing.json", force=True) == {}
+
+
+# ------------------------------------------------- v5.3 剪枝加固回归
+def test_last_move_capture_forced_into_window():
+    """保送槽:对手最近落子应被强制纳入候选(小窗口 k=1 也不被剪掉)。"""
+    import antifive.heuristic as h
+    board = _board({(0, 0): W, (0, 1): W, (0, 2): W, (7, 7): W})
+    idx = 7 * BOARD_SIZE + 7
+    plain = {int(m) for _, m in h._candidates(board, B, -1, 20, 5, CFG, 1)}
+    assert idx not in plain                      # 常规排序会剪掉它
+    slotted = {int(m) for _, m in h._candidates(
+        board, B, -1, 20, 5, CFG, 1, opp_last=idx)}
+    assert idx in slotted                        # 保送槽保证入窗
+
+
+def test_line_maps_second_axis_run():
+    """lt2:双轴构造(落子后两轴各成三)可被识别。"""
+    import antifive.heuristic as h
+    board = _board({(5, 3): W, (5, 4): W, (3, 5): W, (4, 5): W})
+    _, lt_w, _, _, _, lt2_w = h._line_maps_combo(board)
+    assert int(lt_w[5, 5]) >= 3 and int(lt2_w[5, 5]) >= 3
+
+
+def test_gift_double_threat_boost(monkeypatch):
+    """投送双威胁项:能安置到双活三枢纽的吃子分应提高 O_GIFT_D2+D3。"""
+    import antifive.heuristic as h
+    board = _board({(5, 3): W, (5, 4): W, (3, 5): W, (4, 5): W, (8, 5): W})
+    cap = 8 * BOARD_SIZE + 5
+    d2, d3 = h.O_GIFT_D2, h.O_GIFT_D3
+    with_gift = {int(m): float(s)
+                 for s, m in h._candidates(board, B, -1, 20, 5, CFG, 8)}
+    monkeypatch.setattr(h, "O_GIFT_D2", 0.0)
+    monkeypatch.setattr(h, "O_GIFT_D3", 0.0)
+    no_gift = {int(m): float(s)
+               for s, m in h._candidates(board, B, -1, 20, 5, CFG, 8)}
+    assert with_gift[cap] - no_gift[cap] == pytest.approx(d2 + d3)
+
+
+def _step30_position() -> ReverseGomoku:
+    """对局-20261010-1145:第 30 手(黑 E0)前夜局面,用于 v5.3 归因回归。"""
+    from antifive.record import coord_to_idx
+    prefix = ("O0 L0 L0 F6 D0 D0 J6 O0 I6 O0 J5 L0 G5 L0 L5 O0 K4 L5 J7 L0 "
+              "J2 L0 L2 J2 J4 O0 O3 D0 I5")
+    g = ReverseGomoku(CFG)
+    for tok in prefix.split():
+        g.make_move(coord_to_idx(tok))
+    return g
+
+
+def test_step30_blunder_not_chosen():
+    """v5.3 回归:30 手 E0(白可吃 E0 投送 I4)在 d5 不得成为首选。
+
+    修复前 d5 首选 E0(+1.30 假分,内节点宽度剪掉唯一反击),修复后应跌出候选。"""
+    from antifive.record import coord_to_idx
+    g = _step30_position()
+    e0 = coord_to_idx("E0")
+    _, moves = analysis_moves(g.board, B, -1, g.turn_count, g.white_turns,
+                              CFG, np.random.default_rng(0), depth=5, k=8,
+                              use_vcf=False)
+    assert moves
+    vals = dict(moves)
+    assert moves[0][0] != e0
+    assert vals.get(e0, -1e18) < moves[0][1]
