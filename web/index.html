@@ -68,14 +68,45 @@
         <div class="notify" id="notify">暂无提示</div>
         <div class="buttons" id="buttons"></div>
         <div class="rules">
-          <p>1. 胜负：连成五子者输。</p>
-          <p>2. 落子：黑先白后，在交叉点上落子。</p>
-          <p>3. 推子：落在对方棋子上时，使对方棋子在八个方向上移动任意格，但无法越过其他棋子。</p>
-          <p>4. 禁手：白前两手禁止推子，禁止自杀着，禁止无路线推子。</p>
+          <p>1. 胜负：先连成五子者输。</p>
+          <p>2. 落子：黑先白后，在交叉点上交替落子。</p>
+          <p>3. 推子：落在对方棋子上，然后在八个方向上移动该棋子任意格，但会被其他棋子阻挡。</p>
         </div>
-        <div class="credit">原 GUI by 硅基飙尘葆光 · 网页版基于 Pyodide</div>
+        <div class="credit">GUI by 硅基飙尘葆光 · 网页版基于 Pyodide</div>
       </aside>
     </main>
+
+    <div id="intro" class="modal hidden">
+      <div class="modal-card intro-card">
+        <h2>逆五子棋 <span class="intro-sub">Antifive</span></h2>
+        <div class="intro-section">
+          <h3>规则说明</h3>
+          <p>1. 胜负：先连成五子者输。</p>
+          <p>2. 落子：黑先白后，在交叉点上交替落子。</p>
+          <p>3. 推子：落在对方棋子上，然后在八个方向上移动该棋子任意格，但会被其他棋子阻挡。</p>
+        </div>
+        <div class="intro-section">
+          <h3>玩法发明</h3>
+          <p>玩法由 <b>日出333</b> 发明：
+            <a href="https://space.bilibili.com/484235404" target="_blank" rel="noopener">B站主页</a>
+            · <a href="https://www.bilibili.com/video/BV1n84y1G7jT" target="_blank" rel="noopener">规则介绍视频</a>
+            · <a href="https://www.bilibili.com/video/BV1i1eB6REcr" target="_blank" rel="noopener">GUI 展示视频</a>
+          </p>
+        </div>
+        <div class="intro-section">
+          <h3>关于本作</h3>
+          <p>网页与仓库作者：<b>硅基飙尘葆光</b>（guijixzh）
+            <a href="https://guijixzh.github.io/Inverse-Gomoku-GUI-vs-AI/" target="_blank" rel="noopener">在线版</a>
+            · <a href="https://github.com/guijixzh/Inverse-Gomoku-GUI-vs-AI" target="_blank" rel="noopener">GitHub 仓库</a>
+            · <a href="https://space.bilibili.com/74464185" target="_blank" rel="noopener">B站</a>
+          </p>
+        </div>
+        <label class="intro-skip"><input id="intro-skip" type="checkbox" /> 下次不再显示</label>
+        <div class="modal-actions">
+          <button id="intro-start" class="primary">开始游戏</button>
+        </div>
+      </div>
+    </div>
 
     <div id="settings" class="modal hidden">
       <div class="modal-card">

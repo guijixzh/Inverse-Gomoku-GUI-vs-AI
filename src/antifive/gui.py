@@ -432,7 +432,7 @@ class Panel:
         self.font_xs = font_xs
         self.buttons = {}                      # name -> (rect, label)
         y = PANEL_BUTTON_TOP
-        for name in ("设定", "人执黑", "人执白", "人人对战", "机机观战", "新局", "悔棋",
+        for name in ("设定", "新局", "人执黑", "人执白", "人人对战", "机机观战", "悔棋",
                      "认输", "保存棋谱", "读取棋谱"):
             rect = pygame.Rect(BOARD_PX + 30, y, PANEL_W - 60, self.BTN_H)
             self.buttons[name] = (rect, name)
@@ -2573,11 +2573,10 @@ class App:
             t = self._fit_text(self.font_xs, "暂无提示", r.w - 12, (200, 194, 182))
         self.screen.blit(t, (r.x + 6, r.centery - t.get_height() // 2))
 
-    _RULES = ("1. 胜负：连成五子者输。",
-              "2. 落子：黑先白后，在交叉点上落子。",
-              "3. 推子：落在对方棋子上时，使对方棋子在八个方向上移动任意格，"
-              "但无法越过其他棋子。",
-              "4. 禁手：白前两手禁止推子，禁止自杀着，禁止无路线推子。")
+    _RULES = ("1. 胜负：先连成五子者输。",
+              "2. 落子：黑先白后，在交叉点上交替落子。",
+              "3. 推子：落在对方棋子上，然后在八个方向上移动该棋子任意格，"
+              "但会被其他棋子阻挡。")
 
     @staticmethod
     def _wrap_text(font, text, max_w):

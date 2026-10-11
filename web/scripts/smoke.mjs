@@ -103,6 +103,12 @@ await wait(() => document.getElementById("loading").classList.contains("hidden")
 await wait(() => window.__antifive?.state, 60000, 50);
 check(true, "engine ready");
 
+await wait(() => !document.getElementById("intro").classList.contains("hidden"), 15000, 100);
+check(true, "intro modal shown");
+await page.click("#intro-start");
+await wait(() => document.getElementById("intro").classList.contains("hidden"));
+check(true, "intro modal dismissed");
+
 const visibilityRedraw = await page.evaluate(() => {
   const setHidden = (value) => {
     Object.defineProperty(document, "hidden", { configurable: true, get: () => value });

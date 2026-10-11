@@ -414,6 +414,47 @@ button.active {
   background: var(--btn-active);
 }
 
+.intro-card {
+  width: min(520px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.intro-sub {
+  font-size: 13px;
+  color: #78644c;
+}
+
+.intro-section {
+  margin-bottom: 12px;
+}
+
+.intro-section h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: #78644c;
+}
+
+.intro-section p {
+  margin: 3px 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.intro-section a {
+  color: var(--wood-dark);
+}
+
+.intro-skip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #78644c;
+  margin: 2px 0 10px;
+  cursor: pointer;
+}
+
 .loading {
   position: fixed;
   inset: 0;

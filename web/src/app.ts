@@ -22,6 +22,7 @@ const VERSION_LABELS: Record<string, string> = {
 const MODE_NAMES = ["人执黑", "人执白", "人人对战", "机机观战"];
 
 const RESIGN_CONFIRM_MS = 4000;   // 认输二次确认窗口:首次点击后需在此时长内再点
+const INTRO_KEY = "antifive-intro-skip";   // 勾选「下次不再显示」后写入 localStorage
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -143,6 +144,7 @@ export class App {
           memoryGB: nav.deviceMemory,
           dpr: window.devicePixelRatio,
         });
+        this.maybeShowIntro();
         this.newGame();
       })
       .catch((error) => {
@@ -158,11 +160,11 @@ export class App {
     const buttons = $("buttons");
     const actions: [string, string][] = [
       ["settings", "设定"],
+      ["new", "新局"],
       ["mode-0", MODE_NAMES[0]],
       ["mode-1", MODE_NAMES[1]],
       ["mode-2", MODE_NAMES[2]],
       ["mode-3", MODE_NAMES[3]],
-      ["new", "新局"],
       ["undo", "悔棋"],
       ["resign", "认输"],
       ["save", "保存棋谱"],
@@ -899,6 +901,32 @@ export class App {
     btn.textContent = "重试 / 刷新";
     btn.addEventListener("click", () => window.location.reload());
     $("loading").appendChild(btn);
+  }
+
+  private maybeShowIntro() {
+    try {
+      if (localStorage.getItem(INTRO_KEY) === "1") return;
+    } catch {
+      // 隐私模式等禁用 localStorage:照常展示
+    }
+    const el = $("intro");
+    el.classList.remove("hidden");
+    $("intro-start").addEventListener("click", () => this.closeIntro(), { once: true });
+    el.addEventListener("click", (event) => {
+      if (event.target === el) this.closeIntro();
+    });
+  }
+
+  private closeIntro() {
+    const skip = document.getElementById("intro-skip") as HTMLInputElement | null;
+    if (skip?.checked) {
+      try {
+        localStorage.setItem(INTRO_KEY, "1");
+      } catch {
+        // 忽略存储失败
+      }
+    }
+    $("intro").classList.add("hidden");
   }
 
   private syncPanel() {
