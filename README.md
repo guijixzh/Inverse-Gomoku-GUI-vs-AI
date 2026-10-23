@@ -151,8 +151,11 @@ npm run bench    # 构建后浏览器搜索性能基准
   详见 [`docs/training-log.md`](docs/training-log.md)。
 - KataGo 权重(`models/katago/*.bin`)为本项目基于[hzyhhzy](https://github.com/hzyhhzy)的
   [KataGomo](https://github.com/hzyhhzy/KataGomo) 自训练的逆五规则权重;
-  `katago.exe` 与 CUDA/cuDNN 运行库因许可与体积原因**不随仓库分发**,
-  使用方式见 [`docs/engines.md`](docs/engines.md)。
+  `katago.exe` 与 CUDA/cuDNN 运行库因许可与体积原因**不随仓库分发**。
+  **NVIDIA 显卡用 CUDA 版;AMD 显卡(含 APU)用 OpenCL 版**(KataGo 官方支持,
+  显卡驱动自带运行库,无需 CUDA);**没有独立显卡时用核显的 OpenCL 版,
+  或纯 CPU 的 Eigen 版**。三种版本共用同一份权重与 GTP 配置,使用方式见
+  [`docs/engines.md`](docs/engines.md)。
 - 开发环境:Windows / Python 3.13 / torch 2.9.1+cu130 / pygame 2.6.1 /
   numpy 2.2.6(支持 Python ≥ 3.10)。
 
@@ -165,9 +168,11 @@ cd Inverse-Gomoku-GUI-vs-AI
 conda create -n antifive python=3.13 -y
 conda activate antifive
 
-# GPU(推荐):按 CUDA 版本安装 torch,例如 CUDA 13.0
+# torch 二选一:
+#   NVIDIA 显卡:按驱动 CUDA 版本,例如 CUDA 13.0
 pip install torch --index-url https://download.pytorch.org/whl/cu130
-# 或 CPU 版:pip install torch
+#   AMD / Intel 核显 / 无独显:CPU 版(KataGo 不经过 torch,也可以完全不装)
+pip install torch
 
 pip install -e ".[gui,nn]"
 ```
@@ -188,19 +193,38 @@ python scripts/setup_env.py            # 检查依赖与资源是否齐全(不�
 python scripts/setup_env.py --install  # 自动安装缺失依赖(按硬件选择 torch)
 ```
 
-`--install` 会自动检测 NVIDIA GPU:有 GPU 装 CUDA 版 torch,没有 GPU
-自动装 CPU 版(功能完整,速度较慢);还支持 `--cpu` 强制 CPU 版、
-`--torch-index URL` 自定义下载源。脚本同时校验权重/配置文件是否齐全,
-并提示 KataGo 可执行文件与 DLL 是否就位。
+`--install` 会自动识别显卡并按硬件选择方案:
+
+| 硬件 | torch | KataGo |
+| --- | --- | --- |
+| NVIDIA(有 CUDA 驱动) | CUDA 版 | CUDA 版 |
+| AMD 独显 / APU | CPU 版 | OpenCL 版 |
+| Intel 核显 | CPU 版 | OpenCL 版 |
+| 无可用显卡(虚拟机/无显示设备) | CPU 版 | Eigen 纯 CPU 版 |
+| 其他/未识别厂商 | CPU 版 | 先试 OpenCL,失败换 Eigen(通用兜底) |
+
+还支持 `--cpu` 强制 CPU 版 torch、`--torch-index URL` 自定义下载源、
+`--katago cuda|opencl|eigen` 覆写引擎建议。脚本同时校验权重/配置文件是否齐全,
+并尽量识别已有 `katago.exe` 的后端(CUDA/OpenCL/Eigen)是否与本机显卡匹配。
 
 ### 可选:启用 KataGo 引擎(最简流程)
 
-1. 自行构建/获取支持逆五规则的 `katago.exe`:见 [docs/engines.md](docs/engines.md)
-   (源码来自 KataGomo;GPU 版另需 NVIDIA CUDA/cuDNN 运行库,均**不随仓库分发**);
-2. 把 `katago.exe` 与依赖 DLL 放到 `katago/` 目录(或任意位置);
+KataGo 官方预编译包**不含逆五规则**,需要从 KataGomo 源码构建;**同一份权重与
+配置,按显卡换一个 `katago.exe` 即可**:
+
+| 你的显卡 | 用哪个版本 | 运行期依赖 |
+| --- | --- | --- |
+| NVIDIA | CUDA 版 | CUDA/cuDNN 的 DLL |
+| AMD 独显 / APU | OpenCL 版 | 显卡驱动自带的 OpenCL |
+| Intel 核显 | OpenCL 版 | 核显驱动 |
+| 无独显 / 无可用显卡 | Eigen 纯 CPU 版 | 无(任何 x64 机器可跑) |
+| 其他/不确定 | 先 OpenCL,不行换 Eigen | — |
+
+1. 按上表构建 `katago.exe`(命令与参数建议见 [docs/engines.md](docs/engines.md));
+2. 把 `katago.exe` 与 `zlib1.dll` 放到 `katago/`(CUDA 版再加 CUDA/cuDNN DLL);
 3. 启动 GUI →「设定 → KataGo」→ 用「浏览」选择可执行文件/权重/GTP 配置 →
    「确定」(路径会保存到本机 `config/engines.local.json`,已被 gitignore);
-4. 再次运行 `python scripts/setup_env.py` 复检。
+4. 再次运行 `python scripts/setup_env.py` 复检(会提示 exe 后端与显卡是否匹配)。
 
 > 说明:本仓库**不包含 KataGo 训练程序与训练依赖**;`models/katago/*.bin`
 > 是外部训练好的成品权重,可直接用于对局。
@@ -406,7 +430,7 @@ Inverse-Gomoku-GUI-vs-AI/
 │   ├── training/               # 自对弈与训练
 │   └── tools/                  # 基准、对拍、诊断、参数调优
 ├── web/                        # 网页版(Vite + TypeScript + Canvas,原生 TS 引擎)
-├── scripts/setup_env.py        # 环境自检与依赖自动安装(GPU/CPU 自适应)
+├── scripts/setup_env.py        # 环境自检与依赖安装(NVIDIA/AMD/核显/无显卡自适应)
 ├── config/                     # engines.json 与 gtp_test.cfg
 ├── data/                       # 调参/评估局面池、示例棋谱(调优参数覆盖可放此)
 ├── models/                     # 权重(说明见 models/README.md)
@@ -424,8 +448,8 @@ Inverse-Gomoku-GUI-vs-AI/
   其他平台未验证;
 - **Python**:≥ 3.10(开发环境 3.13);
 - **torch 可选**:未安装时 GUI/启发式/KataGo 均可用,神经网络引擎自动禁用;
-- **KataGo**:可执行文件与 CUDA/cuDNN 不随仓库分发,需自行构建/获取
-  (见 `docs/engines.md`);
+- **KataGo**:可执行文件与 CUDA/cuDNN 不随仓库分发;NVIDIA 用 CUDA 版,
+  AMD/核显用 OpenCL 版,无独显用 Eigen 纯 CPU 版(见 `docs/engines.md`);
 - **自研网络**:训练失败,仅供研究;
 - **规则一致性测试**:依赖外部 `rules_probe.exe`,默认跳过。
 

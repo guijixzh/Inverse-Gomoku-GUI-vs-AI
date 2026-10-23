@@ -193,17 +193,69 @@ python -m antifive.tools.match_ai --games 96 --depth 8 --budget 12 --workers 8 \
 
 ### 可执行文件(不随仓库分发)
 
-`katago.exe` 与 CUDA/cuDNN 运行库因 NVIDIA 许可与体积原因不随仓库分发,
-KataGo 的训练程序与依赖也不在开源范围内(本仓库只含运行配置与成品权重)。
-运行环境自检可执行 `python scripts/setup_env.py`。
-使用步骤:
+`katago.exe`、CUDA/cuDNN 运行库因许可与体积原因不随仓库分发,KataGo 的训练
+程序与依赖也不在开源范围内(本仓库只含运行配置与成品权重)。运行环境自检可
+执行 `python scripts/setup_env.py`,它会按显卡直接给出该用哪个版本。
 
-1. 从 [hzyhhzy/KataGomo](https://github.com/hzyhhzy/KataGomo) 获取源码,
-   编译支持逆五规则(white-restrict / `newgame_gomokuamazons` 相关改动)的
-   `katago.exe`;
-2. 将 `katago.exe` 及依赖 DLL 放到仓库根目录 `katago/`;
-3. 依赖:GPU 版需要 CUDA/cuDNN(NVIDIA 官方渠道获取,不随仓库分发);
-4. 在 `config/engines.json` 中确认路径。
+KataGo 官方预编译包**不含逆五规则**(`whiteRestrictTurns` /
+`newgame_gomokuamazons`),必须从 [hzyhhzy/KataGomo](https://github.com/hzyhhzy/KataGomo)
+源码构建。**同一份 `.bin` 权重与 `gtp_test.cfg` 通用**,只是按显卡换构建后端:
+
+| 硬件 | 用哪个版本 | 运行期还需要 | 说明 |
+| --- | --- | --- | --- |
+| NVIDIA(驱动较新) | **CUDA**(最快) | CUDA Toolkit + cuDNN 的 DLL | 官方教程的默认路线 |
+| AMD 独显 / APU | **OpenCL** | 显卡驱动(Adrenalin 自带 OpenCL) | KataGo 官方支持,不需要 CUDA |
+| Intel 核显 | **OpenCL** | 核显驱动 | 能跑,速度约独显的数分之一 |
+| 无独显 / 无可用显卡 | **Eigen(纯 CPU)** | 无 | 任何 x64 机器可跑,AVX2 多线程 |
+| 其他/不确定 | 先 OpenCL,不行换 Eigen | — | 通用兜底 |
+
+#### 构建(Windows,VS2022 + CMake,KataGomo 源码)
+
+```bat
+:: CUDA(NVIDIA)
+cmake -S cpp -B build_cuda -G "Visual Studio 17 2022" -A x64 ^
+  -DUSE_BACKEND=CUDA -DNO_GIT_REVISION=1 -DNO_LIBZIP=1
+cmake --build build_cuda --config Release -j
+
+:: OpenCL(AMD 独显 / APU / Intel 核显)
+cmake -S cpp -B build_opencl -G "Visual Studio 17 2022" -A x64 ^
+  -DUSE_BACKEND=OPENCL -DNO_GIT_REVISION=1 -DNO_LIBZIP=1
+cmake --build build_opencl --config Release -j
+
+:: Eigen(纯 CPU,AVX2)
+cmake -S cpp -B build_eigen -G "Visual Studio 17 2022" -A x64 ^
+  -DUSE_BACKEND=EIGEN -DUSE_AVX2=1 -DEIGEN3_INCLUDE_DIRS=<eigen3 解压目录> ^
+  -DNO_GIT_REVISION=1 -DNO_LIBZIP=1
+cmake --build build_eigen --config Release -j
+```
+
+- OpenCL 构建:`find_package(OpenCL)` 找不到时会退回 CUDA Toolkit 自带的
+  OpenCL 头/库(`CUDA::OpenCL`),所以 N 卡机器也能编出给 A 卡用的 exe;
+  运行期用的是显卡驱动提供的系统 `OpenCL.dll`,不依赖 NVIDIA。
+- Eigen 构建:纯头文件库,不需要任何 GPU 相关依赖;`-DEIGEN3_INCLUDE_DIRS`
+  指向解压后的 eigen3 根目录(`Eigen/`、`unsupported/` 所在层)。
+- 产物 `katago.exe` 与 `zlib1.dll` 放到仓库根目录 `katago/`;CUDA 版还要把
+  CUDA/cuDNN 的 DLL 一起放进来。
+
+#### 核显 / 无独显 / A 卡的参数建议
+
+- **AMD / Intel 核显(OpenCL)**:`numSearchThreads` 保持 4 左右,
+  `nnMaxBatchSize` 从 16 起(核显可 8);`config/gtp_test.cfg` 里的
+  `nnMaxBatchSize = 256` 是按 CUDA 调的,OpenCL/CPU 建议临时改小。
+  APU 与独显同时存在时,启动日志会列出全部 OpenCL 设备,用
+  `openclDeviceToUse = 设备号` 指定;首次启动会自调优(tuner),慢几十秒属正常。
+- **纯 CPU(Eigen)**:`numEigenThreadsPerModel` 设为物理核数;`nnMaxBatchSize`
+  8 左右即可。15×15 小棋盘 + 11.8MB 小模型,桌面 CPU 通常能到独显 CUDA 的
+  十分之一量级,仍明显强于启发式。
+- 三档都建议先用 `katago benchmark` 实测再定参数:
+
+```bat
+katago.exe benchmark -model models/katago/antifive15-20260821-083223.bin ^
+  -config config/gtp_test.cfg -boardsize 15
+```
+
+- 若 `katago.exe` 起不来并报 `[WinError 126] 找不到指定的模块`,基本是版本与
+  显卡不匹配(在 A 卡上跑了 CUDA 版):按上表改换 OpenCL/Eigen 版即可。
 
 ### 配置
 
