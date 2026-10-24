@@ -172,6 +172,19 @@ def _other(color: int) -> int:
 # LRU 缓存:同一棋盘掩码在一次搜索中被反复重算(合法掩码/危险图/候选/评估),
 # 缓存命中避免重复的 8 方向 cumsum 计算。键 = 掩码字节(225B),DFS 局部性好。
 # GUI 的对弈引擎(worker)/分析引擎(worker)与主线程 play 会并发访问,必须加锁。
+try:  # Cython 热路径(可选)
+    from . import _fast as _FAST
+except Exception:  # pragma: no cover
+    _FAST = None
+
+
+def _fast_board(board: np.ndarray) -> np.ndarray:
+    """转成 Cython 需要的连续 int8 视图(已是则零拷贝)。"""
+    if board.dtype == np.int8 and board.flags.c_contiguous:
+        return board
+    return np.ascontiguousarray(board, dtype=np.int8)
+
+
 _RUNS_CACHE: "OrderedDict[bytes, np.ndarray]" = OrderedDict()
 _RUNS_CACHE_LOCK = threading.Lock()
 RUNS_CACHE_MAX = 8192
@@ -260,6 +273,11 @@ def runs_pad_for(board: np.ndarray, color: int) -> np.ndarray:
 def _line5_map_for(board: np.ndarray, color: int) -> np.ndarray:
     """(15,15) bool:在 (r,c) 落 color 子即连五的格子(不筛空格,含对方棋子位)。
     占领对方棋子格完成己方连五即用此判定(与 danger_map 同一公式,只是不滤空)。"""
+    if _FAST is not None:
+        try:
+            return _FAST.line5_mask(_fast_board(board), int(color)).astype(bool)
+        except Exception:  # pragma: no cover
+            pass
     out = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
     runs_pad = runs_pad_for(board, color)
     for d1, d2 in AXES_DIRS:
@@ -404,6 +422,16 @@ class ReverseGomoku:
                        pre_nb_empty: np.ndarray | None = None) -> np.ndarray:
         """(ACTION_SIZE,) bool 合法动作掩码。静态版,任意状态可调。
         turn_count 用于判负窗口:窗口内连五不判负,自杀着不剔除。"""
+        if _FAST is not None:
+            try:
+                m = _FAST.legal_mask(
+                    _fast_board(board), int(player), int(pending),
+                    int(white_turns), int(config.loss_start_turns),
+                    int(config.white_restrict_turns), int(turn_count),
+                    bool(config.mask_suicide), pre_nb_empty)
+                return m.astype(bool)
+            except Exception:  # pragma: no cover
+                pass
         mask = np.zeros(ACTION_SIZE, dtype=bool)
         empty_flat = (board == EMPTY).reshape(-1)
 

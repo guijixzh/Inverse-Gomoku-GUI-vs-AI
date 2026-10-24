@@ -304,3 +304,119 @@ def board_features(int8_t[:, ::1] board, int white_turns, int turn_count,
                     elif total == 3:
                         m["jump3"] = m["jump3"] + 1
     return (m_black, m_white, fours_black, fours_white, dang_black, dang_white)
+
+
+# --------------------------------------------------------------------------
+# 合法动作掩码 / 连五图(替代 numpy 版 legal_mask_for / _line5_map_for)
+# --------------------------------------------------------------------------
+cdef inline bint _inside(int r, int c):
+    return 0 <= r < 15 and 0 <= c < 15
+
+
+def line5_mask(int8_t[:, ::1] board, int color):
+    """(15,15) uint8:若 color 落在该格即成五则为 1(不筛空格,与 Python 版一致)。"""
+    cdef np.ndarray[np.uint8_t, ndim=2] out = np.zeros((15, 15), dtype=np.uint8)
+    cdef int drs[8]
+    cdef int dcs[8]
+    cdef int i
+    drs[0] = -1; dcs[0] = 0
+    drs[1] = 1;  dcs[1] = 0
+    drs[2] = 0;  dcs[2] = -1
+    drs[3] = 0;  dcs[3] = 1
+    drs[4] = -1; dcs[4] = -1
+    drs[5] = -1; dcs[5] = 1
+    drs[6] = 1;  dcs[6] = -1
+    drs[7] = 1;  dcs[7] = 1
+    cdef int ax1[4]
+    cdef int ax2[4]
+    ax1[0] = 0; ax2[0] = 1
+    ax1[1] = 2; ax2[1] = 3
+    ax1[2] = 4; ax2[2] = 7
+    ax1[3] = 5; ax2[3] = 6
+    cdef int r, c, a, d1, d2, rr, cc, cnt
+    for r in range(15):
+        for c in range(15):
+            for a in range(4):
+                d1 = ax1[a]
+                d2 = ax2[a]
+                cnt = 0
+                rr = r + drs[d1]
+                cc = c + dcs[d1]
+                while _inside(rr, cc) and board[rr, cc] == color:
+                    cnt += 1
+                    rr += drs[d1]
+                    cc += dcs[d1]
+                rr = r + drs[d2]
+                cc = c + dcs[d2]
+                while _inside(rr, cc) and board[rr, cc] == color:
+                    cnt += 1
+                    rr += drs[d2]
+                    cc += dcs[d2]
+                if cnt >= 4:
+                    out[r, c] = 1
+                    break
+    return out
+
+
+def legal_mask(int8_t[:, ::1] board, int player, int pending, int white_turns,
+               int loss_start, int white_restrict, int turn_count,
+               bint mask_suicide, object pre_nb_empty=None):
+    """(225,) uint8 合法动作掩码,语义与 ReverseGomoku.legal_mask_for 一致。"""
+    cdef int drs[8]
+    cdef int dcs[8]
+    drs[0] = -1; dcs[0] = 0
+    drs[1] = 1;  dcs[1] = 0
+    drs[2] = 0;  dcs[2] = -1
+    drs[3] = 0;  dcs[3] = 1
+    drs[4] = -1; dcs[4] = -1
+    drs[5] = -1; dcs[5] = 1
+    drs[6] = 1;  dcs[6] = -1
+    drs[7] = 1;  dcs[7] = 1
+    cdef np.ndarray[np.uint8_t, ndim=1] out = np.zeros(225, dtype=np.uint8)
+    cdef int r, c, d, j, rr, cc, opp, i
+    cdef int* nb = NULL
+    cdef np.ndarray[np.int32_t, ndim=1] nb_arr
+    if pending >= 0:
+        # 从 pending 出发沿 8 方向连续空位,距离 j 的格子可安置
+        for d in range(8):
+            rr = pending // 15
+            cc = pending % 15
+            j = 0
+            while True:
+                j += 1
+                rr += drs[d]
+                cc += dcs[d]
+                if not _inside(rr, cc):
+                    break
+                if board[rr, cc] != 0:
+                    break
+                out[rr * 15 + cc] = 1
+        return out
+    for r in range(15):
+        for c in range(15):
+            if board[r, c] == 0:
+                out[r * 15 + c] = 1
+    if not (white_restrict > 0 and player == 2 and white_turns < white_restrict):
+        opp = 3 - player
+        if pre_nb_empty is not None:
+            nb_arr = np.ascontiguousarray(pre_nb_empty, dtype=np.int32).reshape(-1)
+            for i in range(225):
+                if board[i // 15, i % 15] == opp and nb_arr[i] > 0:
+                    out[i] = 1
+        else:
+            for r in range(15):
+                for c in range(15):
+                    if board[r, c] != opp:
+                        continue
+                    for d in range(8):
+                        rr = r + drs[d]
+                        cc = c + dcs[d]
+                        if _inside(rr, cc) and board[rr, cc] == 0:
+                            out[r * 15 + c] = 1
+                            break
+    if mask_suicide and turn_count >= loss_start:
+        l5 = line5_mask(board, player)
+        for i in range(225):
+            if l5[i // 15, i % 15]:
+                out[i] = 0
+    return out

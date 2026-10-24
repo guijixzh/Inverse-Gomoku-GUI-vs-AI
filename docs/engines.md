@@ -406,3 +406,25 @@ katago.exe benchmark -model models/katago/antifive15-20260821-083223.bin ^
 **等价性验证**:300 张随机棋盘(`line_maps` 六张图逐元素相等)、200 张(`board_features`
 返回的 dict/fours/dang 完全相等)、60 张 × 两方(`evaluate` 返回值逐位相等)、固定深度选点一致;
 `python -m pytest tests` 121 passed / 1 skipped。
+
+### 追加:合法掩码 / 连五图 kernel(2026-10-25)
+
+`legal_mask_for` 与 `_line5_map_for` 原本要走 `fwd_run_lengths_padded`(8 方向 cumsum +
+LRU)+ numpy 掩码拼装,是单节点里除特征外的第二大开销。现在由 `_fast.legal_mask` 与
+`_fast.line5_mask` 直接算:
+
+| 函数 | 原实现 | 现实现 |
+| --- | --- | --- |
+| `legal_mask_for` | runs cache + numpy 布尔拼装 | 逐格射线扫描(安置步)/ 8 邻域探测(占领)/ 连五剔除 |
+| `_line5_map_for` | runs cache + 4 轴切片求和 | 直接双向走线计数 |
+
+冷缓存微基准(380 个实战局面,平均):`legal_mask_for` 10.9 µs → 9.0 µs(1.22×),
+`_line5_map_for` 5.9 µs → 4.1 µs(1.44×);但两者都**不再触碰 runs LRU**,搜索里省下的
+是缓存管理与 numpy 小数组分配,15 s 实测节点数提升远大于单次微基准。
+
+**15 s 预算、串行、同局面(叠加前面的 C 之后)**:高级 89,697 → **135,990**(1.52×)、
+大师 76,488 → **109,481**(1.43×)、传奇 74,449 → **117,011**(1.57×)。
+
+等价性:400 组随机状态(含安置步/白棋限制/自杀窗口)`legal_mask` 与 Python 版逐位相等;
+固定深度下高级 depth 7、大师 depth 5、传奇 depth 5 的选点与 `evaluate` 返回值完全一致;
+`pytest` 121 passed。
