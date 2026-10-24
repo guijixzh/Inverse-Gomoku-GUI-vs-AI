@@ -19,24 +19,27 @@ export interface Profile {
   /** 初级没有 VCF / 置换表 / 开局库 / 蒸馏。 */
   supportsVcf: boolean;
   supportsBook: boolean;
-  /** 0=无蒸馏，1=v1，2=v2；高级 v1，传奇 v2，大师默认关。 */
+  /** 0=无蒸馏，1=v1，2=v2；高级/大师 v1，传奇 v2（大师默认开 v1，见 docs）。 */
   distill: 0 | 1 | 2;
   vcfDepth: number;
   vcfNodes: number;
   defaultVcf: boolean;
+  /** 大师/传奇档的搜索侧防守机制（移植自 Python heuristic.py）：
+   * 防守预留时间片、证明必败降权、预防性封堵（先手礼防御）。 */
+  defense: boolean;
 }
 
 const PROFILES: Record<EngineVersion, Profile> = {
   beginner: { version: "beginner", label: "初级", supportsVcf: false, supportsBook: false,
-    distill: 0, vcfDepth: 0, vcfNodes: 0, defaultVcf: false },
+    distill: 0, vcfDepth: 0, vcfNodes: 0, defaultVcf: false, defense: false },
   mid: { version: "mid", label: "中级", supportsVcf: true, supportsBook: true,
-    distill: 0, vcfDepth: 8, vcfNodes: 60_000, defaultVcf: true },
+    distill: 0, vcfDepth: 8, vcfNodes: 60_000, defaultVcf: true, defense: false },
   advanced: { version: "advanced", label: "高级", supportsVcf: true, supportsBook: true,
-    distill: 1, vcfDepth: 8, vcfNodes: 60_000, defaultVcf: true },
+    distill: 1, vcfDepth: 8, vcfNodes: 60_000, defaultVcf: true, defense: false },
   hell: { version: "hell", label: "大师", supportsVcf: true, supportsBook: true,
-    distill: 0, vcfDepth: 12, vcfNodes: 240_000, defaultVcf: true },
+    distill: 1, vcfDepth: 12, vcfNodes: 240_000, defaultVcf: true, defense: true },
   legend: { version: "legend", label: "传奇", supportsVcf: true, supportsBook: true,
-    distill: 2, vcfDepth: 12, vcfNodes: 240_000, defaultVcf: true },
+    distill: 2, vcfDepth: 12, vcfNodes: 240_000, defaultVcf: true, defense: true },
 };
 
 export function profileFor(version: unknown): Profile {

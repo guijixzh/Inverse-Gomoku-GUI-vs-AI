@@ -25,11 +25,29 @@
 - 状态/命令：同手顺的 `state()`（board/player/pending/turn/legal/kinds/numbers/danger）与 Python `web_api` 对拍一致。
 - 评估：25 个随机局面在无蒸馏/v1/v2 三种模式下与 Python `heuristic.evaluate` 逐值一致，最大误差 < 4e-7。
 - 战术：80 个随机局面的 `kill_pairs` 与 Python `tactics` 完全一致；30 个局面 VCF 深度 1–3 与 Python `find_forced_kill` 完全一致。
-- 档位：`beginner` 无 VCF/开局库/蒸馏；`mid` 无蒸馏；`advanced` v1；`legend` v2；`hell` 默认无 v2。
+- 档位：`beginner` 无 VCF/开局库/蒸馏；`mid` 无蒸馏；`advanced` v1；`hell` v1；`legend` v2。
+  （`hell` 在 Python 端是不带蒸馏的独立引擎；网页端 2026-10-23 起改用 v1，见 `records/web_ab_distill_12s/report.md`——
+  不开 v1 时大师档会比高级低约 60–70 Elo，开 v1 后两者持平，更符合「大师 ≥ 高级」的预期。）
+- 深度：`ai()` 默认 `uniformDepth`（网页端与 Python `heuristic_versions.choose` 同语义——同一 `depth` 原样给五档）；`uniformDepth:false` 才回到按档位夹取的旧行为（初级 2 / 中级 4 / 高级 8 / 大师 +1 / 传奇 +2）。
+- 防守：`hell`/`legend` 启用移植自 Python `heuristic.py` 的防守机制（防守预留、证明必败降权、预防性封堵），见下节。
 - 搜索：深度 1–3 与无置换表暴力 negamax 分值一致；根与内部候选均按 Python `_candidates` 移植（空位/占领各 k、杀着/防守路线、diversity、history/killer 补充），内部搜索加入 PVS、TT 边界、killer、强制扩展与 `_jump_through` 送杀判定；20 局面深度 4 与 Python 同着法 17/20。
 - 提示：`hint` 走根候选全窗口分析，返回 `pos_v` 与按分值排序的前 5 着，形状与 Python `analysis_moves` 一致。
 - 变化：引擎层缺省 `variety=off`，同手顺逐位可复现（与旧版一致，`tests/variety.test.mjs` 覆盖）；
   只有 `ai` 请求显式带 `variety` 才启用采样。
+
+## 大师/传奇档防守机制
+
+`hell`/`legend` 两档在搜索侧启用一套移植自 Python `src/antifive/heuristic.py`
+（大师/传奇）的防守机制，其余档位保持原样（与 Python `heuristic_v6` 等一致）：
+
+| 机制 | 网页位置 | Python 出处 |
+| --- | --- | --- |
+| 防守预留时间片：先扣 `min(1.8s, 15% 时限)`，剩余时间才做迭代加深；无战术材料时只扣 100ms | `search.ts` `defensiveSliceMs` / `defenseReserveNeeded` / `searchBest` | `_vcf_slice`、`_defense_reserve_needed` |
+| 证明必败降权：根着法逐一手推，走完即被对手证明必败的降到 `-(MATE-(2*turns+3))`（尽量晚死） | `search.ts` `filterProvenLosses` / `provenKillTurns` / `occupyTurnLoss` | `_filter_defensive_kills`、`_proven_loss_value`、`_occupy_turn_loss` |
+| 预防性封堵（先手礼防御）：枚举"投送枢纽"与可作为投掷子的己方棋子，模拟成杀后把射线空格补进根候选 | `candidates.ts` `pregiftCover` / `appendPregift` | `_pregift_defense`、`_append_pregift` |
+
+开关在 `profiles.ts` 的 `Profile.defense`（仅 `hell`/`legend` 为 `true`）；
+`web/tests/defense.test.mjs` 覆盖档位开关、封堵覆盖与时限行为。
 
 ## AI 变化（去固定化）
 

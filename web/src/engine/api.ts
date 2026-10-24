@@ -256,7 +256,11 @@ export class EngineSession {
       }
     }
     const depth = Math.max(1, Math.floor(Number(req.depth ?? 4)));
-    const baseDepth = depthForProfile(profile.version, depth);
+    // 统一有效深度(与 Python heuristic_versions.choose 语义对齐):depth 是统一的搜索深度
+    // 上限,预算内一直迭代加深到时限;不再按档位夹取(那会让初级永远停在 2 层、1ms 就落子)。
+    // 传 uniformDepth:false 可退回旧的按档位夹取规则(仅供复现旧标定)。
+    const uniform = req.uniformDepth !== false;
+    const baseDepth = uniform ? depth : depthForProfile(profile.version, depth);
     const budget = req.budget ? Number(req.budget) : 0;
     const t0 = Date.now();
     this.lastNodes = 0;
@@ -279,8 +283,12 @@ export class EngineSession {
       }
     }
 
-    const dynamic = budget > 0 && profile.supportsVcf
-      ? (profile.version === "mid" ? Math.max(baseDepth, 8) : Math.max(baseDepth, 16))
+    const dynamic = budget > 0
+      ? (uniform
+        ? Math.max(baseDepth, 16)
+        : (profile.supportsVcf
+          ? (profile.version === "mid" ? Math.max(baseDepth, 8) : Math.max(baseDepth, 16))
+          : baseDepth))
       : baseDepth;
     const result = searchBest(this.pos, this.config, {
       maxDepth: dynamic,
@@ -315,6 +323,7 @@ export class EngineSession {
       this.lastEngine = profile.version;
     }
     const depth = Math.max(1, Math.floor(Number(req.depth ?? 2)));
+    const uniform = req.uniformDepth !== false;
     const budget = req.budget === undefined || req.budget === null ? 2 : Number(req.budget);
     const vcfEnabled = profile.supportsVcf &&
       (req.vcf === undefined ? profile.defaultVcf : Boolean(req.vcf));
@@ -330,9 +339,9 @@ export class EngineSession {
       }
     }
     const r = analyze(this.pos, this.config, {
-      maxDepth: depthForProfile(profile.version, depth),
+      maxDepth: uniform ? depth : depthForProfile(profile.version, depth),
       timeMs: budget > 0 ? budget * 1000 : 0,
-      k: 5,
+      k: Math.max(1, Math.min(24, Math.floor(Number(req.k ?? 5)))),
       engine: profile.version,
       interruptBuffer: this.interruptBuffer,
       onProgress: this.progress,

@@ -45,6 +45,11 @@ _ALIASES = {
     "传奇": VERSION_LEGEND,
 }
 
+def _default_workers() -> int:
+    from .root_parallel import default_workers
+    return default_workers()
+
+
 _OLD_MODULE = None
 _MID_MODULE = None
 _ADV_MODULE = None
@@ -98,8 +103,11 @@ def _legend():
 
 def choose(version: str, board, player, pending, turn_count, white_turns,
            config, rng, depth=None, time_budget=None, progress_cb=None,
-           tt=None, use_vcf: bool | None = None):
-    """统一着法选择:按版本分发;中级/高级/大师/传奇支持 tt/use_vcf。"""
+           tt=None, use_vcf: bool | None = None, workers: int | None = None):
+    """统一着法选择:按版本分发;中级/高级/大师/传奇支持 tt/use_vcf。
+
+    workers: 根节点并行的进程数(高级/大师/传奇三档支持;
+    None 时读环境变量 ANTIFIVE_ROOT_WORKERS,默认 1=串行)。"""
     v = normalize(version)
     if v == VERSION_BEGINNER:
         return _old().choose_heuristic_move(
@@ -111,27 +119,35 @@ def choose(version: str, board, player, pending, turn_count, white_turns,
             depth=depth, time_budget=time_budget, progress_cb=progress_cb,
             tt=tt, use_vcf=use_vcf)
     if v == VERSION_ADVANCED:
+        if workers is None:
+            workers = _default_workers()
         return _adv().choose_heuristic_move(
             board, player, pending, turn_count, white_turns, config, rng,
             depth=depth, time_budget=time_budget, progress_cb=progress_cb,
-            tt=tt, use_vcf=use_vcf)
+            tt=tt, use_vcf=use_vcf, workers=workers)
+    if workers is None:
+        workers = _default_workers()
     if v == VERSION_LEGEND:
         return _legend().choose_heuristic_move(
             board, player, pending, turn_count, white_turns, config, rng,
             depth=depth, time_budget=time_budget, progress_cb=progress_cb,
-            tt=tt, use_vcf=use_vcf)
+            tt=tt, use_vcf=use_vcf, workers=workers)
     from .heuristic import choose_heuristic_move
     return choose_heuristic_move(
         board, player, pending, turn_count, white_turns, config, rng,
         depth=depth, time_budget=time_budget, progress_cb=progress_cb,
-        tt=tt, use_vcf=use_vcf)
+        tt=tt, use_vcf=use_vcf, workers=workers)
 
 
 def analysis(version: str, board, player, pending, turn_count, white_turns,
              config, rng, depth=None, time_budget=None, k=8, progress_cb=None,
-             tt=None, use_vcf: bool | None = None):
-    """统一局面分析(初级无 tt/use_vcf 参数,自动降级)。"""
+             tt=None, use_vcf: bool | None = None, workers: int | None = None):
+    """统一局面分析(初级无 tt/use_vcf/workers 参数,自动降级)。
+
+    workers: 根节点并行的进程数(None 时读 ANTIFIVE_ROOT_WORKERS,默认串行)。"""
     v = normalize(version)
+    if workers is None:
+        workers = _default_workers()
     if v == VERSION_BEGINNER:
         return _old().analysis_moves(
             board, player, pending, turn_count, white_turns, config, rng,
@@ -150,9 +166,9 @@ def analysis(version: str, board, player, pending, turn_count, white_turns,
         return _legend().analysis_moves(
             board, player, pending, turn_count, white_turns, config, rng,
             depth=depth, time_budget=time_budget, k=k, progress_cb=progress_cb,
-            tt=tt, use_vcf=use_vcf)
+            tt=tt, use_vcf=use_vcf, workers=workers)
     from .heuristic import analysis_moves
     return analysis_moves(
         board, player, pending, turn_count, white_turns, config, rng,
         depth=depth, time_budget=time_budget, k=k, progress_cb=progress_cb,
-        tt=tt, use_vcf=use_vcf)
+        tt=tt, use_vcf=use_vcf, workers=workers)

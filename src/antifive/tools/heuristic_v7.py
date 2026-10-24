@@ -116,6 +116,7 @@ from .. import distill
 from .. import distill2
 from .. import openbook
 from .. import threat_search
+from ..root_parallel import map_tasks as _map_root_tasks
 from ..tactics import (
     jump_through as _jump_through, kill_captures, kill_placements, kill_samples,
 )
@@ -1731,9 +1732,71 @@ def _filter_defensive_kills(ranked, board, player, pending, turn_count,
     return ranked
 
 
+_WORKER_TT = None
+
+
+def _worker_tt():
+    """每个 worker 进程内持久置换表:跨深度迭代复用(不与父进程共享)。"""
+    global _WORKER_TT
+    if _WORKER_TT is None:
+        _WORKER_TT = _TT()
+    return _WORKER_TT
+
+
+def _rebuild_config(fields):
+    """子进程里没有父进程的 GameConfig 实例,按字段重建。"""
+    from ..reversegomoku import GameConfig
+    return GameConfig(**fields)
+
+
+def _root_child_task(payload):
+    """并行根搜索的子任务:评估根节点的一个着法(与串行分支等价)。
+
+    payload = (board_bytes, player, pending, turn_count, white_turns,
+               cfg_fields, move, depth_left, wall_deadline)
+    返回 (move, value | None, nodes, aborted);value=None 表示自杀着(跳过)。
+    wall_deadline 是 time.time() 的绝对时刻(同机各进程可比),0 表示不限时。"""
+    (board_bytes, player, pending, turn_count, white_turns, cfg_fields,
+     move, depth_left, wall_deadline) = payload
+    board = np.frombuffer(board_bytes, dtype=np.int8).reshape(
+        BOARD_SIZE, BOARD_SIZE).copy()
+    config = _rebuild_config(cfg_fields)
+    opp = _other(player)
+    r, c = divmod(int(move), BOARD_SIZE)
+    b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
+        board, move, player, pending, turn_count, white_turns, config)
+    if loser == player:
+        return (int(move), None, 0, False)
+    if loser == opp:
+        return (int(move), WIN - 1, 0, False)
+    if np.count_nonzero(b2) == PLACE_SIZE:
+        return (int(move), 0.0, 0, False)
+    remaining = 0.0
+    if wall_deadline > 0.0:
+        remaining = wall_deadline - time.time()
+        if remaining <= 0.0:
+            return (int(move), None, 0, True)      # 排队期间已超时
+    ctx = _SearchCtx(_worker_tt(),
+                     time.perf_counter() + remaining if remaining > 0 else None)
+    if pend2 >= 0:
+        v = _search(b2, p2, pend2, tc2, wt2, config, depth_left,
+                    -1e18, 1e18, ctx, ext_budget=1, ply=2)
+    elif (_jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
+                        pending % BOARD_SIZE if pending >= 0 else c,
+                        player) >= 4
+          and _loses_to_kill(b2, player, wt2, tc2, config)):
+        v = -(WIN - 3)
+    else:
+        v = -_search(b2, p2, pend2, tc2, wt2, config, depth_left,
+                     -1e18, 1e18, ctx, ext_budget=1, ply=2,
+                     opp_last=int(move))
+    return (int(move), v, ctx.nodes, ctx.aborted)
+
+
 def _root_iterative(board, player, pending, turn_count, white_turns, config,
                     rng, depth, time_budget, k, node_cb=None, report_cb=None,
-                    tt=None, noise: float = 0.0, time_start: float | None = None):
+                    tt=None, noise: float = 0.0, time_start: float | None = None,
+                    workers: int = 1):
     """根节点迭代加深公共实现:choose 与 analysis 共用,保证两者同值同选。
 
     先验杀着与 VCF 由调用方处理;这里只做"候选生成 + 逐层全窗口根评估"。
@@ -1801,56 +1864,94 @@ def _root_iterative(board, player, pending, turn_count, white_turns, config,
         # 处),仅失败高(可能更优)才按全窗口重搜。10 个根候选全窗口时 d7≈10s,
         # PVS 后 d7≈3s(实测),有效深度多 1-2 层;最优着法始终精确,编号靠后
         # 的着法为不高于 alpha 的上界(排序/唯一最优不受影响)。
-        root_alpha = -1e18
-        first = True
-        for _, m in cands2:
-            r, c = divmod(int(m), BOARD_SIZE)
-            b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
-                board, m, player, pending, turn_count, white_turns, config)
-            if loser == player:
-                continue
-            if loser == opp:
-                v = WIN - 1                # 根着法第 1 步即杀
-            elif np.count_nonzero(b2) == PLACE_SIZE:
-                v = 0.0
-            elif pend2 >= 0:
-                # 占领步后同一方继续安置,子节点视角与根一致,不取负;
-                # 同侧节点可用父 alpha 作下界(仅需判断是否超过 alpha)
-                if USE_ROOT_PVS and not NO_ROOT_PVS and not first:
-                    v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                                root_alpha, 1e18, ctx, ext_budget=1, ply=2)
+        if workers > 1 and len(cands2) > 1:
+            # 根并行:每层把全部根着法分发到 worker 进程(各自独立 TT、无 alpha 传播)
+            _now = time.perf_counter()
+            if ctx.deadline is not None:
+                _remaining = max(0.0, ctx.deadline - _now)
+                if _remaining <= 0.0:
+                    completed = False
+                    break
+                _wall_deadline = time.time() + _remaining
+            else:
+                _wall_deadline = 0.0
+            _cfg_fields = dict(
+                loss_start_turns=config.loss_start_turns,
+                white_restrict_turns=config.white_restrict_turns,
+                mask_suicide=config.mask_suicide)
+            _state = board.astype(np.int8).tobytes()
+            _tasks = [(_state, player, pending, turn_count, white_turns,
+                       _cfg_fields, int(m), d - 1, _wall_deadline)
+                      for _, m in cands2]
+            _res = _map_root_tasks("antifive.tools.heuristic_v7:_root_child_task",
+                                   _tasks, workers)
+            for _mv, _v, _nodes, _aborted in _res:
+                ctx.nodes += _nodes
+                if _aborted:
+                    completed = False
+                if _v is None:
+                    continue
+                if noise > 0.0:
+                    _v += rng.uniform(0.0, noise)
+                depth_moves.append((_mv, _v))
+            if node_cb is not None:
+                node_cb(ctx.nodes)
+            if (not completed or ctx.aborted
+                    or (ctx.deadline is not None
+                        and time.perf_counter() > ctx.deadline)):
+                completed = False
+                break
+        else:
+            root_alpha = -1e18
+            first = True
+            for _, m in cands2:
+                r, c = divmod(int(m), BOARD_SIZE)
+                b2, p2, pend2, tc2, wt2, loser = ReverseGomoku.apply_step(
+                    board, m, player, pending, turn_count, white_turns, config)
+                if loser == player:
+                    continue
+                if loser == opp:
+                    v = WIN - 1                # 根着法第 1 步即杀
+                elif np.count_nonzero(b2) == PLACE_SIZE:
+                    v = 0.0
+                elif pend2 >= 0:
+                    # 占领步后同一方继续安置,子节点视角与根一致,不取负;
+                    # 同侧节点可用父 alpha 作下界(仅需判断是否超过 alpha)
+                    if USE_ROOT_PVS and not NO_ROOT_PVS and not first:
+                        v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                                    root_alpha, 1e18, ctx, ext_budget=1, ply=2)
+                    else:
+                        v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                                    -1e18, 1e18, ctx, ext_budget=1, ply=2)
+                elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
+                                   pending % BOARD_SIZE if pending >= 0 else c,
+                                   player) >= 4 \
+                        and _loses_to_kill(b2, player, wt2, tc2, config):
+                    v = -(WIN - 3)             # 走完留可杀四:对手下回合两步杀
+                elif USE_ROOT_PVS and not NO_ROOT_PVS and not first:
+                    v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                                 -root_alpha - PVS_EPS, -root_alpha, ctx,
+                                 ext_budget=1, ply=2, opp_last=int(m))
+                    if v > root_alpha:
+                        v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
+                                     -1e18, 1e18, ctx, ext_budget=1, ply=2,
+                                     opp_last=int(m))
                 else:
-                    v = _search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                                -1e18, 1e18, ctx, ext_budget=1, ply=2)
-            elif _jump_through(b2, pending // BOARD_SIZE if pending >= 0 else r,
-                               pending % BOARD_SIZE if pending >= 0 else c,
-                               player) >= 4 \
-                    and _loses_to_kill(b2, player, wt2, tc2, config):
-                v = -(WIN - 3)             # 走完留可杀四:对手下回合两步杀
-            elif USE_ROOT_PVS and not NO_ROOT_PVS and not first:
-                v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                             -root_alpha - PVS_EPS, -root_alpha, ctx,
-                             ext_budget=1, ply=2, opp_last=int(m))
-                if v > root_alpha:
                     v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
                                  -1e18, 1e18, ctx, ext_budget=1, ply=2,
                                  opp_last=int(m))
-            else:
-                v = -_search(b2, p2, pend2, tc2, wt2, config, d - 1,
-                             -1e18, 1e18, ctx, ext_budget=1, ply=2,
-                             opp_last=int(m))
-            first = False
-            if noise > 0.0:
-                v += rng.uniform(0.0, noise)
-            if v > root_alpha:
-                root_alpha = v
-            depth_moves.append((int(m), v))
-            if node_cb is not None:
-                node_cb(ctx.nodes)
-            if ctx.aborted or (ctx.deadline is not None
-                               and time.perf_counter() > ctx.deadline):
-                completed = False
-                break
+                first = False
+                if noise > 0.0:
+                    v += rng.uniform(0.0, noise)
+                if v > root_alpha:
+                    root_alpha = v
+                depth_moves.append((int(m), v))
+                if node_cb is not None:
+                    node_cb(ctx.nodes)
+                if ctx.aborted or (ctx.deadline is not None
+                                   and time.perf_counter() > ctx.deadline):
+                    completed = False
+                    break
         if not completed or not depth_moves:
             break
         depth_moves.sort(key=lambda t: -t[1])
@@ -1882,7 +1983,8 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
                           time_budget: float | None = None,
                           progress_cb=None, tt: "_TT | None" = None,
                           root_prune: bool = True,
-                          use_vcf: bool | None = None) -> int | None:
+                          use_vcf: bool | None = None,
+                          workers: int = 1) -> int | None:
     """返回着法 idx;无子可走(所有着法均自杀)返回 None。
     progress_cb(节点数) 可选:搜索途中定期回调,供 GUI 实时显示计算量。
     tt: 可选置换表(跨步复用,键含完整状态,安全);
@@ -1930,7 +2032,8 @@ def choose_heuristic_move(board, player, pending, turn_count, white_turns,
     ranked, ok = _root_iterative(board, player, pending, turn_count,
                                  white_turns, config, rng, depth, time_budget,
                                  ROOT_K, node_cb=progress_cb, tt=tt,
-                                 noise=O_NOISE, time_start=t_start)
+                                 noise=O_NOISE, time_start=t_start,
+                                 workers=workers)
     if not ok or not ranked:
         return None
     return int(ranked[0][0])
@@ -1946,7 +2049,8 @@ def _terminal_winner(board: np.ndarray):
 
 def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
                    depth=None, time_budget=None, k=8, progress_cb=None,
-                   tt: "_TT | None" = None, use_vcf: bool | None = None):
+                   tt: "_TT | None" = None, use_vcf: bool | None = None,
+                   workers: int = 1):
     """局面分析:返回 (pos_v, moves)。pos_v=当前行棋方局面价值;
     moves=[(着法idx, 价值), ...] 按价值降序,供外部 GUI 投影/胜率显示。
     tt: 可选置换表(跨步复用);分析保持全窗口精确值,不做根 α 剪枝。
@@ -2003,7 +2107,7 @@ def analysis_moves(board, player, pending, turn_count, white_turns, config, rng,
     ranked, ok = _root_iterative(board, player, pending, turn_count,
                                  white_turns, config, rng, depth, time_budget,
                                  k, report_cb=progress_cb, tt=tt,
-                                 time_start=t_start)
+                                 time_start=t_start, workers=workers)
     if not ok or not ranked:
         return (0.0, [])
     return (ranked[0][1], ranked[:k])

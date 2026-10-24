@@ -49,3 +49,6 @@ run_gui.local.bat
 
 # 本机引擎路径覆盖(KataGo 可执行/权重/配置)
 config/engines.local.json
+
+# 临时验证脚本
+.scratch/

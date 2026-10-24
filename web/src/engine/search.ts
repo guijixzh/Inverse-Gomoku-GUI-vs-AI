@@ -9,6 +9,7 @@ import { profileFor } from "./profiles.ts";
 import { candidates } from "./candidates.ts";
 import type { Candidate } from "./candidates.ts";
 import { jumpThrough } from "./tactics.ts";
+import { findForcedKill } from "./vcf.ts";
 import { varietyAt } from "./variety.ts";
 import type { VarietySpec } from "./variety.ts";
 
@@ -183,14 +184,128 @@ export function sampleRoot(
   return pool[pool.length - 1].move;
 }
 
+
+// ---- 大师/传奇档防守机制（移植自 Python src/antifive/heuristic.py）----
+const DEFENSE_VCF_CAP_MS = 1800;
+const DEFENSE_NODE_CAP = 240_000;
+const DEFENSE_VCF_MAX_DEPTH = 12;
+const DEFENSE_MIN_SLICE_MS = 100;
+
+/** 防守机制的运行计数（测试/探针用）。 */
+export const defenseStats = { calls: 0, demoted: 0 };
+
+/** Python `_vcf_slice`：取对局限时的 15%，夹在 [50ms, 1.8s]。 */
+function defensiveSliceMs(budgetMs: number): number {
+  if (!(budgetMs > 0)) return 50;
+  return Math.min(DEFENSE_VCF_CAP_MS, Math.max(50, 0.15 * budgetMs));
+}
+
+/** Python `_defense_reserve_needed`：这一手是否值得预扣防守时间片。 */
+function defenseReserveNeeded(pos: Position, config: Config): boolean {
+  if (pos.pending >= 0) return true;
+  if (pos.turnCount < config.loss_start_turns) return false;
+  const f = features(pos, config);
+  const mine = pos.player === 1 ? f.black : f.white;
+  const theirs = pos.player === 1 ? f.white : f.black;
+  return mine.killable4 > 0 || mine.dead4 > 0 || theirs.killable4 > 0;
+}
+
+/** Python `_loss_value`：看似还能撑 turns 个回合的必败局面分值。 */
+function lossValue(turns: number): number {
+  return -(MATE - (2 * turns + 3));
+}
+
+/** 行棋方是否已被证明必败；证出则返回最少回合数，证不出返回 null。 */
+function provenKillTurns(pos: Position, config: Config, deadline: number,
+                         nodeCap: number): number | null {
+  for (const d of [1, 3, 5, 7, 9, 11]) {
+    if (now() > deadline) return null;
+    const maxDepth = Math.min(d, DEFENSE_VCF_MAX_DEPTH);
+    if (findForcedKill(pos, config, { maxDepth, deadline, nodeCap }) >= 0) {
+      return (d - 1) >> 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Python `_occupy_turn_loss`：占领步之后若还持子（pending>=0），要把所有落点
+ * 都试一遍，只有“每个落点都会被对手证明必败”才算自己必败，并取最长存活。
+ */
+function occupyTurnLoss(pos: Position, config: Config, opp: number,
+                        deadline: number, nodeCap: number): number | null {
+  const placements = legalMoves(pos, config);
+  if (!placements.length) return null;
+  let worst: number | null = null;
+  for (const p of placements) {
+    if (now() > deadline) return null;
+    const u = applyStep(pos, p, config);
+    let safe = false;
+    if (pos.gameOver || pos.loser === opp) safe = true;
+    else if (opp === 2 && pos.whiteTurns < config.white_restrict_turns) safe = true;
+    else if (pos.turnCount < config.loss_start_turns) safe = true;
+    else {
+      const turns = provenKillTurns(pos, config, deadline, nodeCap);
+      if (turns === null) safe = true;
+      else if (worst === null || turns > worst) worst = turns;
+    }
+    undoStep(pos, u);
+    if (safe) return null;
+  }
+  return worst === null ? null : lossValue(worst);
+}
+
+/**
+ * Python `_filter_defensive_kills`：根着法逐一手推，若走完就被对手证明必败，
+ * 就把分值压到“尽量晚死”，避免搜索在必败局面里随手乱走。
+ */
+function filterProvenLosses(root: Position, config: Config,
+                            scores: { move: number; score: number }[],
+                            deadline: number, nodeCap: number): boolean {
+  defenseStats.calls++;
+  if (!scores.length) return false;
+  const top = scores.reduce((a, b) => (b.score > a.score ? b : a));
+  if (top.score >= MATE_LIMIT) return false;
+  if (root.turnCount < config.loss_start_turns) return false;
+  if (root.pending >= 0) return false;
+  const opp = other(root.player);
+  if (opp === 2 && root.whiteTurns < config.white_restrict_turns) return false;
+  let changed = false;
+  for (const item of scores) {
+    if (Math.abs(item.score) >= MATE_LIMIT) continue;
+    if (now() > deadline) break;
+    const u = applyStep(root, item.move, config);
+    let val: number | null = null;
+    if (root.loser === 0) {
+      if (root.pending >= 0) {
+        val = occupyTurnLoss(root, config, opp, deadline, nodeCap);
+      } else if (root.turnCount >= config.loss_start_turns) {
+        const turns = provenKillTurns(root, config, deadline, nodeCap);
+        if (turns !== null) val = lossValue(turns);
+      }
+    }
+    undoStep(root, u);
+    if (val !== null) { item.score = val; changed = true; defenseStats.demoted++; }
+  }
+  if (changed) scores.sort((a, b) => b.score - a.score);
+  return changed;
+}
+
 export function searchBest(
   root: Position,
   config: Config,
   opts: SearchOptions,
 ): SearchResult {
   const t0 = now();
-  const deadline = opts.timeMs > 0 ? t0 + opts.timeMs : Infinity;
-  const distill = profileFor(opts.engine).distill;
+  const prof = profileFor(opts.engine);
+  const distill = prof.distill;
+  // 大师/传奇档先预扣一段防守时间片，剩余时间照常做迭代加深。
+  const defSlice = prof.defense ? defensiveSliceMs(opts.timeMs) : 0;
+  const defMs = defSlice > 0 && root.turnCount >= config.loss_start_turns
+    ? (defenseReserveNeeded(root, config) ? defSlice
+      : Math.min(defSlice, DEFENSE_MIN_SLICE_MS))
+    : 0;
+  const deadline = opts.timeMs > 0 ? t0 + opts.timeMs - defMs : Infinity;
   let nodes = 0;
   let aborted = false;
   let interrupted = false;
@@ -335,7 +450,8 @@ export function searchBest(
     let localBest = -INF;
     let localMove = bestMove;
     const rootLegal = legalMoves(root, config);
-    const list = candidates(root, config, 8, true, 8, null, -1, rootLegal);
+    const list = candidates(root, config, 8, true, 8, null, -1, rootLegal,
+      { pregift: prof.defense });
     const ordered = list.length ? list.map((x) => x.move) : rootLegal;
     if (bestMove >= 0) {
       const at = ordered.indexOf(bestMove);
@@ -365,6 +481,19 @@ export function searchBest(
   }
 
   if (interrupted) throw new Error("搜索已中断");
+
+  // 防守机制:证明必败的根着法降权(用预扣的时间片,不影响主搜索)。
+  if (prof.defense && defMs > 0 && rootScores.length) {
+    const changed = filterProvenLosses(root, config, rootScores,
+      t0 + opts.timeMs, DEFENSE_NODE_CAP);
+    if (changed) {
+      const first = rootScores[0];
+      const top = rootScores.reduce((a, b) => (b.score > a.score ? b : a));
+      const pick = top.score > bestScore ? top : first;
+      bestMove = pick.move;
+      bestScore = pick.score;
+    }
+  }
 
   // 变化档位:仅在无必胜/必败定论(|bestScore| < MATE_LIMIT)且留有随机源时采样,
   // 强制杀与已证明的胜负不倒手(见 variety.ts)。

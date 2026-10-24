@@ -1,9 +1,9 @@
 /** Python `_candidates` 的逐步移植：线图、威胁路线、静态分与分类选取。 */
-import { EMPTY, legalMoves, other } from "./rules.ts";
+import { EMPTY, checkWinAt, legalMoves, other } from "./rules.ts";
 import type { Config, Position } from "./rules.ts";
 import { features } from "./eval.ts";
 import type { Four } from "./eval.ts";
-import { killCaptures, killPlacementsConfig } from "./tactics.ts";
+import { jumpThrough, killCaptures, killPlacementsConfig } from "./tactics.ts";
 
 export interface Candidate {
   score: number;
@@ -27,6 +27,11 @@ const O_BLOCK_SELF4 = 30;
 const O_BLOCK_SELF3 = 10;
 const O_GIFT_D2 = 3;
 const O_GIFT_D3 = 8;
+// Python `heuristic.py` 的 P1 预防性封堵常量。
+const O_PREVENT = 2e3;
+const PREGIFT_K = 3;
+const PREGIFT_HUB_CAP = 48;
+const PREGIFT_SIM_CAP = 96;
 
 const DIRS8: ReadonlyArray<readonly [number, number]> = [
   [-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1],
@@ -183,6 +188,92 @@ function appendDiversity(out: Candidate[], legal: number[], self: number, stat: 
   for (const [nb, m] of scored.slice(0, 2)) out.push({ score: nb * 1e-3, move: m });
 }
 
+/** 先手礼防御用的临时局面：只保留 threats()/features() 需要的字段。 */
+function probePosition(board: Int8Array, player: number, turnCount: number,
+                       whiteTurns: number): Position {
+  return {
+    board, player, pending: -1, turnCount, whiteTurns,
+    moveCount: 0, gameOver: false, loser: 0, isDraw: false, resigned: 0, hash: 0,
+  };
+}
+
+/** 模拟“先手礼”：己方 c 离盘、t 落己方子后，是否立刻成五或造出必杀四。 */
+function giftLethal(board: Int8Array, player: number, c: number, t: number,
+                    turnCount: number, whiteTurns: number, config: Config): boolean {
+  if (board[c] !== player || board[t] !== EMPTY) return false;
+  const b2 = Int8Array.from(board);
+  b2[c] = EMPTY;
+  b2[t] = player;
+  if (checkWinAt(b2, t, player)) return true;
+  return threats(probePosition(b2, player, turnCount, whiteTurns), config).ends.size > 0;
+}
+
+/**
+ * 预防性封堵（Python `_pregift_defense`）：对方如果在空点 t 落子、把己方某个
+ * 棋子 c “投送”成四连，t 就是危险点；把 t 与该己方子之间射线上的空格记为覆盖格。
+ */
+export function pregiftCover(pos: Position, config: Config): Map<number, number> {
+  const cover = new Map<number, number>();
+  if (pos.pending >= 0) return cover;
+  if (pos.turnCount < config.loss_start_turns) return cover;
+  const board = pos.board;
+  const self = pos.player;
+  const hubs: number[] = [];
+  for (let i = 0; i < 225; i++) {
+    if (board[i] !== EMPTY) continue;
+    const r = (i / 15) | 0;
+    const c = i % 15;
+    if (jumpThrough(board, r, c, self) >= 4) hubs.push(i);
+  }
+  if (!hubs.length) return cover;
+  let sims = 0;
+  for (const t of hubs.slice(0, PREGIFT_HUB_CAP)) {
+    const tr = (t / 15) | 0;
+    const tc = t % 15;
+    for (const [dr, dc] of DIRS8) {
+      const path: number[] = [];
+      let stone = -1;
+      for (let k = 1; k < 15; k++) {
+        const nr = tr + dr * k, nc = tc + dc * k;
+        if (nr < 0 || nr >= 15 || nc < 0 || nc >= 15) break;
+        const cell = nr * 15 + nc;
+        const v = board[cell];
+        if (v === EMPTY) { path.push(cell); continue; }
+        if (v === self && path.length) stone = cell;
+        break;
+      }
+      if (stone < 0) continue;
+      if (sims >= PREGIFT_SIM_CAP) return cover;
+      sims++;
+      if (!giftLethal(board, self, stone, t, pos.turnCount, pos.whiteTurns, config)) continue;
+      for (const cell of path) cover.set(cell, (cover.get(cell) ?? 0) + 1);
+    }
+  }
+  return cover;
+}
+
+/** Python `_append_pregift`：覆盖格按 (-w, -cell) 排序取前 3，补进根候选。 */
+function appendPregift(out: Candidate[], cover: Map<number, number>, legal: number[]): void {
+  if (!cover.size) return;
+  const present = new Set(out.map((x) => x.move));
+  const legalSet = new Set(legal);
+  const items: Array<[number, number]> = [];
+  for (const [cell, w] of cover) {
+    if (!legalSet.has(cell) || present.has(cell)) continue;
+    items.push([w, cell]);
+  }
+  if (!items.length) return;
+  items.sort((a, b) => b[0] - a[0] || b[1] - a[1]);
+  for (const [w, cell] of items.slice(0, PREGIFT_K)) {
+    out.push({ score: O_PREVENT + Math.min(w, 99), move: cell });
+  }
+}
+
+export interface CandidateOptions {
+  /** 大师/传奇档：把预防性封堵的覆盖格补进根候选。 */
+  pregift?: boolean;
+}
+
 export function candidates(
   pos: Position,
   config: Config,
@@ -192,6 +283,7 @@ export function candidates(
   history: Float64Array | null = null,
   oppLast = -1,
   legalInput?: number[],
+  opts: CandidateOptions = {},
 ): Candidate[] {
   const kk = coreK === null ? k : Math.min(coreK, k);
   const self = pos.player;
@@ -235,6 +327,7 @@ export function candidates(
     });
     for (const x of selectTop(scored, (x) => x.key + hist(x.move), kk)) out.push({ score: x.score, move: x.move });
     if (diversity) appendDiversity(out, legal, self, stat);
+    if (diversity && opts.pregift) appendPregift(out, pregiftCover(pos, config), legal);
     return finish();
   }
 
@@ -285,5 +378,6 @@ export function candidates(
   });
   for (const x of selectTop(capScored, (x) => x.key + hist(x.move), kk)) out.push({ score: x.score, move: x.move });
   if (diversity) appendDiversity(out, legal, self, stat);
+  if (diversity && opts.pregift) appendPregift(out, pregiftCover(pos, config), legal);
   return finish();
 }
