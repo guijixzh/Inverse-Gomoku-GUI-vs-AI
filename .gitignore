@@ -52,3 +52,8 @@ config/engines.local.json
 
 # 临时验证脚本
 .scratch/
+
+# Cython 构建产物(用 setup_fast.py 重新生成)
+*.pyd
+*.so
+src/antifive/_fast.c

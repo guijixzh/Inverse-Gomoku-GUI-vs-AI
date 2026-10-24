@@ -459,12 +459,19 @@ def _build_shift_idx():
     return idx, ok
 
 
+try:  # Cython 热路径(可选,缺失时全部走下面纯 Python 实现)
+    from .. import _fast as _FAST
+except Exception:  # pragma: no cover - 未编译环境
+    _FAST = None
+
 SHIFT_IDX, SHIFT_OK = _build_shift_idx()
 CENTER_FLAT = CENTER_MAP.reshape(-1)
 
 
 def _shift(board2d: np.ndarray, dr: int, dc: int) -> np.ndarray:
     """out[r,c] = board2d[r-dr, c-dc],越界补 0。静态索引查表,无 pad/clip 开销。"""
+    if _FAST is not None:
+        return _FAST.shift(board2d, dr, dc)
     out = board2d.reshape(-1)[SHIFT_IDX[dr + 1, dc + 1]].reshape(BOARD_SIZE, BOARD_SIZE)
     out *= SHIFT_OK[dr + 1, dc + 1]
     return out
@@ -489,6 +496,12 @@ def _line_maps_combo(board: np.ndarray) -> tuple:
     if v is not None:
         _LINE_MAP_CACHE.move_to_end(key)
         return v
+    if _FAST is not None:
+        res = _FAST.line_maps(np.ascontiguousarray(board, dtype=np.int8))
+        if len(_LINE_MAP_CACHE) >= LINE_MAP_CACHE_MAX:
+            _LINE_MAP_CACHE.popitem(last=False)
+        _LINE_MAP_CACHE[key] = res
+        return res
     lts = []
     lt2s = []
     for color in (BLACK, WHITE):
@@ -722,6 +735,15 @@ def _board_features(board: np.ndarray, white_turns: int,
     if v is not None:
         _FEAT_CACHE.move_to_end(key)
         return v
+    if _FAST is not None:
+        feats = _FAST.board_features(
+            np.ascontiguousarray(board, dtype=np.int8), white_turns, turn_count,
+            config.loss_start_turns, config.white_restrict_turns,
+            _LINES4, RAYS_LIST)
+        if len(_FEAT_CACHE) >= FEAT_CACHE_MAX:
+            _FEAT_CACHE.popitem(last=False)
+        _FEAT_CACHE[key] = feats
+        return feats
     flat = board.reshape(-1).tolist()          # 纯 Python 列表,标量索引快 10 倍
     m_black = {"killable4": 0, "dead4": 0, "open3": 0, "jump3": 0, "closed3": 0}
     m_white = {"killable4": 0, "dead4": 0, "open3": 0, "jump3": 0, "closed3": 0}
@@ -853,18 +875,24 @@ def _positional_summary(board: np.ndarray) -> tuple:
         return v
     mb = (board == BLACK).astype(np.int32)
     mw = (board == WHITE).astype(np.int32)
-    adj_b = adj_w = 0
-    for dr, dc in ((1, 0), (0, 1), (1, 1), (1, -1)):
-        adj_b += int((mb * _shift(mb, dr, dc)).sum())
-        adj_w += int((mw * _shift(mw, dr, dc)).sum())
-    nb_b = np.zeros_like(mb)
-    nb_w = np.zeros_like(mw)
-    for dr in (-1, 0, 1):
-        for dc in (-1, 0, 1):
-            if dr == 0 and dc == 0:
-                continue
-            nb_b += _shift(mb, dr, dc)
-            nb_w += _shift(mw, dr, dc)
+    if _FAST is not None:
+        nb_b8, nb_w8, adj_b, adj_w = _FAST.neighbor_counts(
+            np.ascontiguousarray(board, dtype=np.int8))
+        nb_b = nb_b8.astype(np.int32)
+        nb_w = nb_w8.astype(np.int32)
+    else:
+        adj_b = adj_w = 0
+        for dr, dc in ((1, 0), (0, 1), (1, 1), (1, -1)):
+            adj_b += int((mb * _shift(mb, dr, dc)).sum())
+            adj_w += int((mw * _shift(mw, dr, dc)).sum())
+        nb_b = np.zeros_like(mb)
+        nb_w = np.zeros_like(mw)
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nb_b += _shift(mb, dr, dc)
+                nb_w += _shift(mw, dr, dc)
     res = (adj_b, adj_w,
            float((mb * nb_b * CENTER_MAP).sum()),
            float((mw * nb_w * CENTER_MAP).sum()),

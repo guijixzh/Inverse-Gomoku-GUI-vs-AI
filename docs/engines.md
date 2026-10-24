@@ -364,3 +364,45 @@ katago.exe benchmark -model models/katago/antifive15-20260821-083223.bin ^
 **结论**:当前自训练权重的最强 KataGo 在 12s 等时下对"最强启发式"取得
 96:0,强度差距大于约 560 Elo;该差距主要来自战术强制力(移子送礼连五),
 而非启发式自损着(全程 0 次自我致命着)。
+
+## 单进程提速:B(去重复计算)+ C(Cython 热路径)
+
+-- 目标:在不改变任何搜索决策的前提下,让同一个进程每秒能搜更多节点。
+
+**C:Cython 热路径**(`src/antifive/_fast.pyx`,构建 `python setup_fast.py build_ext --inplace`)
+
+移植的 kernel(全部整数运算,与 numpy/Python 版逐位等价):
+
+| kernel | 原实现 | 说明 |
+| --- | --- | --- |
+| `shift` | `heuristic_v6._shift` | 225 格平移,替换花式索引 + `out *= mask` |
+| `line_maps` | `_line_maps_combo` | 8 方向游程 → `lt/lt2`(两轴最大/次大连子)+ 8 邻域计数,冷缓存 289 µs → 27 µs |
+| `board_features` | `_board_features` | 双色线级模式扫描(四/跳四/活三/受困格),104 µs → 7.3 µs |
+| `neighbor_counts` | `_positional_summary` 的 nb/adj 部分 | 8 邻域同色计数与同色相邻对数 |
+
+三个引擎(`heuristic_v6` 高级、`heuristic.py` 大师、`heuristic_v7.py` 传奇)在各自
+`_shift` / `_line_maps_combo` / `_board_features` / `_positional_summary` 的缓存 miss 分支里
+优先调用扩展,扩展缺失时**自动回退**到原实现(行为逐位不变)。
+
+**B:减少重复计算**
+
+- 三个 4096 条 LRU(`_FEAT_CACHE`/`_LINE_MAP_CACHE`/`_POS_CACHE`)实测命中率只有 0.58,
+  但把上限加到 16384 只换来 +12%,C 落地后这 12% 也消失了(特征重算已降到 7 µs)。
+  结论:缓存不是瓶颈,保持 4096。
+- 真正重复的是「同一局面在候选生成/威胁分析/评估里各算一次」,现在这三次调用都命中同一个
+  kernel 与缓存,单次成本降到 2 µs 级。
+
+**实测(同局面、同 seed、15 s 预算、串行 `workers=1`)**
+
+| 引擎 | 改前节点/步 | 改后节点/步 | 倍数 |
+| --- | ---: | ---: | ---: |
+| 高级 heuristics_v6 | 48,817 | 89,697 | **1.84×** |
+| 大师 heuristic | 50,357 | 76,488 | **1.52×** |
+| 传奇 heuristic_v7 | 43,858 | 74,449 | **1.70×** |
+
+固定深度回归(证明搜索路径不变):高级 depth 7 32.05 s → 16.17 s(节点数 99,196 与着法
+完全一致);大师 depth 5 1.85×、传奇 depth 5 2.16×,选点完全相同。
+
+**等价性验证**:300 张随机棋盘(`line_maps` 六张图逐元素相等)、200 张(`board_features`
+返回的 dict/fours/dang 完全相等)、60 张 × 两方(`evaluate` 返回值逐位相等)、固定深度选点一致;
+`python -m pytest tests` 121 passed / 1 skipped。
