@@ -22,7 +22,8 @@ python -m antifive.gui --model models/best_model.pth
 
 ## 启发式 AI
 
-内置算法,无需额外文件;GUI 中可选深度 1–8(默认 8 + AI 读秒 12 秒,五档通用;
+内置算法,无需额外文件;可选 `ANTIFIVE_ROOT_WORKERS` 开根节点并行、
+`setup_fast.py` 编译 Cython 热路径(见下文两节);GUI 中可选深度 1–8(默认 8 + AI 读秒 12 秒,五档通用;
 大师/传奇在时限内动态加深,不受 8 层硬上限),并可切换五档引擎版本与 VCF
 强制杀链开关(初级无 VCF;默认高级 + VCF 开):
 
@@ -45,7 +46,9 @@ python -m antifive.gui --model models/best_model.pth
 (仅大师档优先读取;传奇/高级/中级共用 `data/params.json`)放覆盖文件。
 A/B 开关:`ANTIFIVE_PREGIFT=1` / `ANTIFIVE_GIFT3=1`(P1/P2,默认关闭)、
 `ANTIFIVE_NO_DYNAMIC=1`、`ANTIFIVE_NO_LMR=1`、`ANTIFIVE_NO_ROOT_PVS=1`
-(实验特性)、VCF 参数 `ANTIFIVE_HELL_VCF_DEPTH/NODES/TIME`。
+(实验特性)、VCF 参数 `ANTIFIVE_HELL_VCF_DEPTH/NODES/TIME`;
+根节点并行 `ANTIFIVE_ROOT_WORKERS`(默认 1=串行,高级/大师/传奇有效,见下文
+「根节点并行」;注意与 `match_web_py` 的 `--workers` 相乘,并发会改变结论)。
 
 命令行行为 `--engine heuristic --heuristic-depth N --limit none|ai --ai-time S
 --heuristic-version beginner|mid|advanced|hell|legend --no-vcf`
@@ -179,6 +182,38 @@ python -m antifive.tools.match_ai --games 96 --depth 8 --budget 12 --workers 8 \
 python -m antifive.tools.match_ai --games 96 --depth 8 --budget 12 --workers 8 \
     --new-module antifive.tools.heuristic_v5 \
     --old-module antifive.tools.heuristic_v2
+```
+
+## 桌面端 vs 网页端(15s 同墙钟,2026-10)
+
+两端的同名档位**不是同一套引擎**(桌面端是五套独立实现,网页端是同一份约 500 行
+alpha-beta 的参数化,见 [`web-engine.md`](web-engine.md)),所以「网页端某档 ≈ Python
+某档」这类推断没有依据,只能对打。工具:`antifive.tools.match_web_py` +
+`web/scripts/engine-bridge.mjs`(同档位对同档位、4 步随机开局同步喂双方、黑白互换、
+10 路并发、每步 15 秒墙钟、每局自检两侧都真的下过棋):
+
+| 档位 | 局数 | 桌面 : 网页 | 桌面胜率(95% CI) | Elo 差 |
+| --- | ---: | ---: | --- | ---: |
+| 初级 | 40 | 18 : 22 | 45.0%(30.7–60.2) | −35 |
+| 中级 | 40 | 20 : 20 | 50.0%(35.2–64.8) | 0 |
+| 高级 | 40 | 30 : 10 | **75.0%**(59.8–85.8) | +191 |
+| 大师 | 40 | 33 : 7 | **82.5%**(68.0–91.3) | +269 |
+| 传奇 | 40 | 29 : 11 | **72.5%**(57.2–83.9) | +168 |
+| 合计 | 200 | 130 : 70 | **65.0%**(58.2–71.3) | +108 |
+
+换算成算力:桌面端每步节点中位数 36,898(高档档位 60k 上下),网页端 404,236——
+桌面端用约 1/11 的节点赢下 65%,差在每节点质量(五套独立引擎 + 防守/预算机制 + Cython)。
+
+**并发数是实验条件,不是调参项**:同一套 harness 把并发从 10 提到 30,双方每步节点
+被腰斩(桌面 25k→13k、网页 40 万→20 万),桌面端胜率从 65% 掉到 56%(CI 跨 50%),
+结论会翻转。复现时固定并发。
+
+```bash
+# 桌面端 vs 网页端:同档同墙钟(建议 --workers 10,别再往上加)
+python -m antifive.tools.match_web_py run --out records/web_vs_py \
+    --pairs advanced:advanced --games-per-pair 40 --py-time 15 --web-budget 15 --workers 10
+# 出表 + 图(只统计两侧都真的下过棋的对局,并按棋谱重判胜负)
+python src/antifive/tools/analyze_web_py.py --out records/web_vs_py --budget 15
 ```
 
 ## 根节点并行(高级/大师/传奇,2026-10-24)
