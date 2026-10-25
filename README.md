@@ -198,6 +198,14 @@ pip install -e ".[gui,nn]"
 pip install -e ".[gui]"
 ```
 
+不想克隆仓库,可以直接从 [Releases](https://github.com/guijixzh/Inverse-Gomoku-GUI-vs-AI/releases)
+下载最新版的 `antifive-2.5.0-py3-none-any.whl` 安装(界面仍需 `pip install "antifive[gui]"` 的依赖):
+
+```bash
+pip install antifive-2.5.0-py3-none-any.whl
+pip install pygame            # GUI 需要
+```
+
 ## 依赖自检与一键配置(推荐)
 
 仓库只包含源码、配置与成品权重;运行所需的第三方可执行文件(如 KataGo)**不随仓库分发**。
