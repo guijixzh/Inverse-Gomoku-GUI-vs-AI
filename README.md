@@ -35,6 +35,9 @@ weights. All code is MIT-licensed and heavily AI-generated.
 - [快速开始](#快速开始)
 - [界面与快捷键](#界面与快捷键)
 - [AI 引擎与权重](#ai-引擎与权重)
+  - [15s 等时复测](#15s-等时复测2026-10)
+  - [网页端与桌面端不是同一套引擎](#网页端与桌面端不是同一套引擎)
+  - [单进程性能](#单进程性能2026-10)
 - [棋谱格式](#棋谱格式)
 - [训练(负结果)](#训练负结果)
 - [仓库结构](#仓库结构)
@@ -517,7 +520,9 @@ Inverse-Gomoku-GUI-vs-AI/
 - **KataGo**:可执行文件与 CUDA/cuDNN 不随仓库分发;NVIDIA 用 CUDA 版,
   AMD/核显用 OpenCL 版,无独显用 Eigen 纯 CPU 版(见 `docs/engines.md`);
 - **自研网络**:训练失败,仅供研究;
-- **规则一致性测试**:依赖外部 `rules_probe.exe`,默认跳过。
+- **规则一致性测试**:依赖外部 `rules_probe.exe`,默认跳过;
+- **Cython 可选**:热路径扩展(`_fast`)需本机编译(MSVC/MinGW + `python setup_fast.py
+  build_ext --inplace`),不编译时自动走纯 Python,功能一致、单进程慢 1.5–1.8×。
 
 ## 第三方与致谢
 
