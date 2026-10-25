@@ -42,6 +42,7 @@ the player who first makes five in a row *loses*). It ships:
 - [Training (negative result)](#training-negative-result)
 - [Repository Layout](#repository-layout)
 - [Environment and Known Boundaries](#environment-and-known-boundaries)
+- [Changelog](CHANGELOG.md)
 - [Third-Party and Credits](#third-party-and-credits)
 - [License](#license)
 - [Contact](#contact)
@@ -157,6 +158,17 @@ This project is an AI battle and GUI implementation of the game.
 
 ## Project Status (read first)
 
+- **v2.5 (2026-10) summary**: performance and cross-implementation parity.
+  (1) Single-process speedups: Cython hot paths (1.5–1.8×) and root-node
+  parallelism (2.9–5.3× with 4 workers), 15 s median nodes/move 16.4 k → 36.9 k,
+  equal-time score vs the web 26.8% → 65.0%. (2) Desktop vs web, same tier and
+  same 15 s wall clock, 200 games: 65.0% overall (lower tiers draw, upper tiers
+  72–82%). (3) Web five-tier Elo calibration at 15 s (Advanced +182 strongest,
+  Master +121, Legend +74, Mid +61, Beginner 0 anchor) plus a 2 s comparison
+  (92 Elo span). (4) Web engine fixes: `uniformDepth` (same semantics as Python),
+  the Master/Legend defense machinery ported, `hell` now uses distillation v1.
+  (5) New cross-engine harness (`match_web_py` + `engine-bridge.mjs`) and a
+  two-implementation quick-reference table in `docs/engines.md`.
 - **v2.0 (2026-10) summary**: new fifth engine tier **Legend** = Master +
   KataGo distillation v2 (MLP value correction **replaces** the v1 value term;
   trained on 460 games / 7664 positions; offline value-sign 85.1%, policy
