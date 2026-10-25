@@ -37,7 +37,7 @@ weights. All code is MIT-licensed and heavily AI-generated.
 - [AI 引擎与权重](#ai-引擎与权重)
   - [五档实现对照](#五档实现对照)
   - [两端 Elo](#两端-elo各自最低档--0)
-  - [同 15s 墙钟对打](#同-15s-墙钟桌面端-vs-网页端)
+  - [同 12s 墙钟对打](#同-12s-墙钟桌面端-vs-网页端)
 - [棋谱格式](#棋谱格式)
 - [训练(负结果)](#训练负结果)
 - [仓库结构](#仓库结构)
@@ -85,12 +85,12 @@ weights. All code is MIT-licensed and heavily AI-generated.
   跨源隔离与资源缓存;Chrome 实测约 5-10 万节点/秒(含 VCF/蒸馏/候选裁剪),
   较 Pyodide 版约 2.3k 节点/秒提升约 20-40 倍(单节点成本口径);
   三档难度对应搜索深度 2 / 4 / 8,默认「困难」(深度 8);
-  限时设置默认「AI 读秒 15 秒」,可自定义每步秒数;「不限时」= 按难度深度完整搜索,
+  限时设置默认「AI 读秒 12 秒」,可自定义每步秒数;「不限时」= 按难度深度完整搜索,
   不做动态加深(避免浏览器端单步长时间占用);
 - 「设定」可切换**引擎版本**(初级经典 / 中级强化 / 高级 / 大师 / 传奇,默认高级);
   网页版以搜索深度上限映射版本强度(初级 2、中级 4、高级 8、大师 +1、传奇 +2),
   与难度档叠加;已移植 Python 的多层 VCF 强制杀链、蒸馏 v1/v2 价值校正与五档
-  能力差异;五档 Elo 已按 15s/步实测标定(以网页端「初级」= 0 为锚点,见
+  能力差异;五档 Elo 已按 12s/步实测标定(以网页端「初级」= 0 为锚点,见
   [两端 Elo](#两端-elo各自最低档--0))——网页端「高级」是最强档,与桌面端
   「传奇 > 大师 > 高级」的次序不同,原因见 [`docs/web-engine.md`](docs/web-engine.md#五档棋力标定2026-10);
 - 「设定」可调**白棋禁推手数**(平衡规则:白棋前 N 手禁止推子,默认 2,
@@ -143,8 +143,8 @@ npm run bench    # 构建后浏览器搜索性能基准
 
 ## 项目状态(重要,先读)
 
-- **v2.5(2026-10)**:当前版本。单进程提速(Cython 热路径 + 根节点并行,15s 每步
-  节点中位数 16.4k → 36.9k);首次把桌面端与网页端同档同 15s 墙钟打了一遍(200 局);
+- **v2.5(2026-10)**:当前版本。单进程提速(Cython 热路径 + 根节点并行,12s 每步
+  节点中位数约 26k);首次把桌面端与网页端同档同墙钟打了一遍(12s 150 局、15s 200 局);
   网页端引擎修正(`uniformDepth` 统一深度、大师/传奇防守机制移植、`hell` 开启蒸馏 v1)。
   完整变更见 [CHANGELOG.md](CHANGELOG.md)。
 - **实用引擎是启发式 AI 与 KataGo。** 自研策略价值网络(`network.py` +
@@ -250,7 +250,7 @@ python -m antifive --engine heuristic    # 启发式 AI(默认深度 8 + AI 读�
 python -m antifive --model models/best_model.pth    # 自研网络作 MCTS 先验(研究)
 python -m antifive --engine katago       # KataGo(需自行放置 katago.exe,见 docs/engines.md)
 python -m antifive --limit none          # 关闭读秒(深度 8 全搜索,单步可能很慢)
-python -m antifive --limit ai --ai-time 15   # 仅 AI 限时读秒,每步 15 秒
+python -m antifive --limit ai --ai-time 12   # 仅 AI 限时读秒,每步 12 秒
 ```
 
 Windows 下也可直接双击仓库根目录的 [`run_gui.bat`](run_gui.bat) 一键启动
@@ -260,7 +260,7 @@ Python 缺少依赖,可先运行 `python scripts/setup_env.py --install` 一键�
 `set PY="你的python.exe路径"` 指定解释器(例如 conda 环境)。
 
 启动后点「设定」可随时更换引擎与参数。桌面默认:**深度 8 + AI 每步读秒 12 秒**
-(与网页困难档的搜索深度一致,五档引擎版本通用);网页默认读秒(15 秒,「不限时」
+(与网页困难档的搜索深度一致,五档引擎版本通用);网页默认读秒(12 秒,「不限时」
 = 按难度深度完整搜索);启发式 AI 可切换**引擎版本**
 (**初级**经典 / **中级**强化(修复+开局库) / **高级**+蒸馏(默认) /
 **大师**防守强化(深化 VCF+严格时限预算+时限动态加深) /
@@ -343,48 +343,51 @@ AI 不参与认输逻辑)可让人类体面结束对局,结果以 `[Result 黑�
 
 桌面端五档是五套独立实现;网页端五档共用同一份搜索(约 1.1k 行 TS),差异只在
 蒸馏档、VCF 深度/节点与防守开关。因此**两端的同名档位不等价**,强弱次序也不同
-(桌面端 传奇 > 大师 > 高级;网页端 高级最强)。
+(桌面端 传奇 > 高级 ≈ 大师 > 中级;网页端 高级最强)。
 
 ### 两端 Elo(各自最低档 = 0)
 
-15 秒/步,桌面端为五档两两对拍的 Bradley-Terry 拟合,网页端为五档自对弈标定;
+12 秒/步,桌面端为五档两两对拍的 Bradley-Terry 拟合,网页端为五档自对弈标定;
 两端各自以「初级 = 0」为锚点,数值只在本列内可比:
 
 | 档位 | 桌面端 Elo | 网页端 Elo |
 | --- | ---: | ---: |
 | 初级 | 0(锚点) | 0(锚点) |
-| 中级 | −106 | +61 |
-| 高级 | +125 | +182 |
-| 大师 | +210 | +121 |
-| 传奇 | +231 | +74 |
+| 中级 | +93 | +55 |
+| 高级 | +224 | +179 |
+| 大师 | +219 | +115 |
+| 传奇 | +425 | +53 |
 
-每档 32–48 局(同一档会随对手不同被重复计数);中级与初级的差值落在 95% 置信区间内,
-可视为同档——15 秒/步下中级把一部分预算让给了 VCF 时间片,深度与初级相同。完整 CI 与
-逐对局数可用 `python -m antifive.tools.py_levels_elo report --out records/py_elo_15s` 复现。
+每档 32–48 局(同一档会随对手不同被重复计数),95% CI 约 ±120–190;桌面端 12 秒/步
+下次序单调(传奇 > 高级 ≈ 大师 > 中级 > 初级),网页端则仍是「高级」最强。
+桌面端数字可用 `python -m antifive.tools.py_levels_elo report --out records/py_elo_12s` 复现,
+网页端用 `node web/scripts/elo-calibrate.mjs` + `src/antifive/tools/web_levels_elo.py`。
 
-### 同 15s 墙钟:桌面端 vs 网页端
+### 同 12s 墙钟:桌面端 vs 网页端
 
-同档位对同档位、每档 40 局、10 路并发、黑白互换(`antifive.tools.match_web_py` +
+同档位对同档位、每档 30 局、10 路并发、黑白互换(`antifive.tools.match_web_py` +
 `web/scripts/engine-bridge.mjs`):
 
 | 档位 | 桌面端 : 网页端 | 桌面端胜率 | Elo 差 |
 | --- | ---: | ---: | ---: |
-| 初级 | 18 : 22 | 45.0% | −35 |
-| 中级 | 20 : 20 | 50.0% | 0 |
-| 高级 | 30 : 10 | **75.0%** | +191 |
-| 大师 | 33 : 7 | **82.5%** | +269 |
-| 传奇 | 29 : 11 | **72.5%** | +168 |
-| 合计 | 130 : 70 | **65.0%** | +108 |
+| 初级 | 7 : 23 | 23.3% | −207 |
+| 中级 | 15 : 15 | 50.0% | 0 |
+| 高级 | 16 : 14 | 53.3% | +23 |
+| 大师 | 14 : 16 | 46.7% | −23 |
+| 传奇 | 20 : 10 | **66.7%** | +120 |
+| 合计 | 72 : 78 | 48.0% | −14 |
 
-低档打平、高档桌面端领先一到两档:网页端五档在 15s 下本来就挤在一起,桌面端是
-五套独立引擎,档位阶梯陡得多。逐档置信区间、口径细节与复现命令见
+12 秒/步下两端整体基本打平(48.0%,CI 40.2–55.9%),只有传奇档桌面端明显领先;
+初级档反过来由网页端领先。把时限放宽到 15 秒时桌面端在高档的领先会扩大
+(高级 75.0%、大师 82.5%,200 局),但那时五档内部的次序反而更乱。逐档置信区间、
+口径细节与复现命令见
 [`docs/engines.md`](docs/engines.md)。
 
 默认参数与常用开关:
 
 - 桌面:「高级 + VCF 开」、深度 8、AI 每步读秒 12s;命令行
   `--heuristic-version/--heuristic-depth/--ai-time/--no-vcf` 可改;
-- 网页:同样默认「高级 + VCF 开」,三档难度 = 深度 2/4/8,默认 AI 读秒 15s,
+- 网页:同样默认「高级 + VCF 开」,三档难度 = 深度 2/4/8,默认 AI 读秒 12s,
   「不限时」按难度深度完整搜索,不做动态加深;
 - 参数:`ANTIFIVE_TT_BITS` 置换表位宽(默认 21,网页等低内存环境可设 19-20)、
   `ANTIFIVE_VCF=0`/`ANTIFIVE_VCF_DEPTH`(杀链开关/深度,默认 8;基础预算
@@ -408,8 +411,8 @@ AI 不参与认输逻辑)可让人类体面结束对局,结果以 `[Result 黑�
 python -m antifive.tools.heur_bench --depths 4,5,6            # 固定局面池基准
 python -m antifive.tools.match_ai --games 24 --depth 8 --budget 1 --workers 8  # 新旧等时对拍
 python -m antifive.tools.match_katago --games 96 --workers 2  # 高级启发式 vs KataGo 等时对拍(配对开局/断点续跑)
-python -m antifive.tools.match_web_py run --out records/web_vs_py --pairs advanced:advanced     --games-per-pair 20 --py-time 15 --web-budget 15 --workers 10  # 桌面端 vs 网页端同档同墙钟
-python -m antifive.tools.py_levels_elo run --out records/py_elo --games-per-pair 8 --time 15 --workers 14  # 桌面端五档自标定
+python -m antifive.tools.match_web_py run --out records/web_vs_py --pairs advanced:advanced     --games-per-pair 30 --py-time 12 --web-budget 12 --workers 10  # 桌面端 vs 网页端同档同墙钟
+python -m antifive.tools.py_levels_elo run --out records/py_elo --games-per-pair 8 --time 12 --workers 14  # 桌面端五档自标定
 ```
 
 ## 棋谱格式

@@ -237,6 +237,17 @@ def report(out_dir: str, chart: bool = False) -> dict:
     bt = fit_bt(games, anchor="beginner")
 
     lines = [f"# 桌面端五档自标定({len(games)} 局)", ""]
+    meta_path = od / "run_meta.json"
+    meta = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    per_step = float(meta.get("time", 0.0) or 0.0)
+    step_txt = f"{per_step:g}s/步" if per_step else "限时"
+    depth_txt = f",depth {int(meta.get('depth', 0))}" if meta.get("depth") else ""
+
     lines.append("| 档位 | Elo(初级=0) | 95% CI | 局数 |")
     lines.append("| --- | ---: | --- | ---: |")
     elo, ci = bt["elo"], bt["ci95"]
@@ -284,7 +295,7 @@ def report(out_dir: str, chart: bool = False) -> dict:
                 color="#4f81bd", error_kw={"capsize": 3, "lw": 1})
         ax.axvline(0, color="#888", lw=0.8, ls="--")
         ax.set_xlabel("Elo(初级 = 0)")
-        ax.set_title(f"桌面端五档 Elo({len(games)} 局,15s/步)")
+        ax.set_title(f"桌面端五档 Elo({len(games)} 局,{step_txt}{depth_txt})")
         fig.tight_layout()
         fig.savefig(od / "py_elo_chart.png")
         plt.close(fig)

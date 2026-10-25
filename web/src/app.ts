@@ -75,7 +75,7 @@ export class App {
 
   private tier = 2;
   private limitMode: "none" | "ai" = "ai";
-  private limitSeconds = 15;
+  private limitSeconds = 12;
   private hver: "beginner" | "mid" | "advanced" | "hell" | "legend" = "advanced";
   private hvcf = true;
   private whiteRestrict = 2;        // 白棋前 N 手禁推(0=无禁推,新局生效)

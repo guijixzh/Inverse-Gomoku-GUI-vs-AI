@@ -40,7 +40,7 @@ the player who first makes five in a row *loses*). It ships:
 - [Engines and Weights](#engines-and-weights)
   - [Five tiers, desktop vs web](#five-tiers-desktop-vs-web)
   - [Elo per side (lowest tier = 0)](#elo-per-side-lowest-tier--0)
-  - [Same 15 s wall clock](#same-15-s-wall-clock-desktop-vs-web)
+  - [Same 12 s wall clock](#same-12-s-wall-clock-desktop-vs-web)
 - [Record Format](#record-format)
 - [Training (negative result)](#training-negative-result)
 - [Repository Layout](#repository-layout)
@@ -81,7 +81,7 @@ Play in the browser, no installation:
 - The first visit downloads the runtime (about 10-20 MB); later visits are served
   from a Service Worker cache. Three difficulty tiers map to heuristic depths
   2 / 4 / 8, defaulting to "Hard" (depth 8). The default limit mode is "AI clock"
-  at 15 seconds per move (customizable); "no clock" performs a full-depth search,
+  at 12 seconds per move (customizable); "no clock" performs a full-depth search,
   with a 180s/move safety cap in the browser (the desktop build has no cap).
 - The settings dialog offers an **engine version** switch (Beginner classic /
   Mid enhanced / Advanced + distillation / Master defense-hardened /
@@ -162,8 +162,9 @@ This project is an AI battle and GUI implementation of the game.
 ## Project Status (read first)
 
 - **v2.5 (2026-10)**: current release. Single-process speedups (Cython hot paths
-  + root-node parallelism, 15 s median nodes/move 16.4 k → 36.9 k); the first
-  same-wall-clock desktop-vs-web match at matched tiers (200 games); web engine
+  + root-node parallelism, ~26 k median nodes/move at 12 s); the first
+  same-wall-clock desktop-vs-web match at matched tiers (150 games at 12 s,
+  200 at 15 s); web engine
   fixes (`uniformDepth`, the Master/Legend defense machinery, distillation v1 on
   `hell`). Full history in [CHANGELOG.md](CHANGELOG.md).
 - **Practical engines are the heuristic AI and KataGo.** The self-trained
@@ -305,49 +306,52 @@ on desktop vs web) is in [`docs/engines.md`](docs/engines.md) (Chinese).
 Desktop tiers are five separate implementations; the web shares one ~1.1 k-line TS
 search and differs only in distillation tier, VCF depth/node cap and the defense
 switch. **Same-named tiers are therefore not equivalent**, and the ordering differs
-(desktop: Legend > Master > Advanced; web: Advanced strongest).
+(desktop: Legend > Advanced ≈ Master > Mid; web: Advanced strongest).
 
 ### Elo per side (lowest tier = 0)
 
-15 s/move. Desktop numbers come from a five-tier round-robin fitted with
+12 s/move. Desktop numbers come from a five-tier round-robin fitted with
 Bradley-Terry; web numbers from a five-tier self-play calibration. Each column is
 anchored at "Beginner = 0", so only compare within a column:
 
 | Tier | Desktop Elo | Web Elo |
 | --- | ---: | ---: |
 | Beginner | 0 (anchor) | 0 (anchor) |
-| Mid | −106 | +61 |
-| Advanced | +125 | +182 |
-| Master | +210 | +121 |
-| Legend | +231 | +74 |
+| Mid | +93 | +55 |
+| Advanced | +224 | +179 |
+| Master | +219 | +115 |
+| Legend | +425 | +53 |
 
-Each tier has 32–48 games (a tier is counted once per opponent). The Mid–Beginner gap
-is inside its 95% confidence interval, i.e. effectively the same strength: at 15 s/step
-Mid spends part of its budget on VCF slices, so its depth matches Beginner's.
+Each tier has 32–48 games (a tier is counted once per opponent), 95% CI roughly
+±120–190. At 12 s/move the desktop order is monotone (Legend > Advanced ≈ Master >
+Mid > Beginner), while on the web Advanced is still the strongest.
 
-### Same 15 s wall clock: desktop vs web
+### Same 12 s wall clock: desktop vs web
 
-Matched tiers, 40 games each, 10 concurrent, colours swapped
+Matched tiers, 30 games each, 10 concurrent, colours swapped
 (`antifive.tools.match_web_py` + `web/scripts/engine-bridge.mjs`):
 
 | Tier | Desktop : web | Desktop win rate | Elo |
 | --- | ---: | ---: | ---: |
-| Beginner | 18 : 22 | 45.0% | −35 |
-| Mid | 20 : 20 | 50.0% | 0 |
-| Advanced | 30 : 10 | **75.0%** | +191 |
-| Master | 33 : 7 | **82.5%** | +269 |
-| Legend | 29 : 11 | **72.5%** | +168 |
-| Total | 130 : 70 | **65.0%** | +108 |
+| Beginner | 7 : 23 | 23.3% | −207 |
+| Mid | 15 : 15 | 50.0% | 0 |
+| Advanced | 16 : 14 | 53.3% | +23 |
+| Master | 14 : 16 | 46.7% | −23 |
+| Legend | 20 : 10 | **66.7%** | +120 |
+| Total | 72 : 78 | 48.0% | −14 |
 
-Lower tiers draw; upper tiers are one to two tiers stronger on the desktop side.
-Per-tier confidence intervals, methodology and reproduction commands are in
+At 12 s/move the two sides are overall even (48.0%, CI 40.2–55.9%); only Legend
+clearly favours the desktop, while Beginner favours the web. With a 15 s clock the
+desktop's upper tiers lead by more (Advanced 75.0%, Master 82.5%, 200 games), but the
+internal tier order gets noisier. Per-tier confidence intervals, methodology and
+reproduction commands are in
 [`docs/engines.md`](docs/engines.md).
 
 Defaults and common switches:
 
 - Desktop: "Advanced + VCF on", depth 8, 12s AI clock per move (flags
   `--heuristic-version/--heuristic-depth/--ai-time/--no-vcf`);
-- Web: also "Advanced + VCF on"; difficulties = depths 2/4/8, default 15s AI
+- Web: also "Advanced + VCF on"; difficulties = depths 2/4/8, default 12s AI
   clock, "no clock" runs a full-depth search (180s/move browser cap);
 - White restriction (balance rule): default 2 turns, configurable in Settings
   (0 = White may capture immediately; applies to the next game). The desktop GUI
