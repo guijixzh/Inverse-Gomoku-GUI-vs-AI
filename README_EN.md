@@ -217,6 +217,10 @@ disabled automatically:
 pip install -e ".[gui]"
 ```
 
+Prefer not to clone? Grab `antifive-2.5.0-py3-none-any.whl` from
+[Releases](https://github.com/guijixzh/Inverse-Gomoku-GUI-vs-AI/releases) and `pip install` it
+(plus `pygame` for the GUI).
+
 ## Setup Check and One-Click Install (recommended)
 
 The repo ships source, configs, and ready-made weights; third-party binaries
