@@ -166,6 +166,7 @@ A/B 每步只给 3,000/20,000 节点（实际深度约 2–4），评估噪声�
 
 `web/scripts/elo-calibrate.mjs`(一局一 worker、黑白互换、断点续跑、`worker_threads`)标定,
 锚点为页面「初级」= 0;按 EGF/AGA 主口径 100 Elo = 1 档换算围棋段位。
+两端口径对照(桌面端实现/机制/12s Elo 与本节并列)见 [`engines.md`](engines.md) 开头的「速查」表。
 
 15s/步、统一深度、`variety: mid`、300 局:
 

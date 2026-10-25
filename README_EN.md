@@ -280,6 +280,9 @@ records the result as `[Result 黑认输/白认输]`.
 
 ## Engines and Weights
 
+A side-by-side quick-reference (implementation, mechanisms, Elo, head-to-head per tier
+on desktop vs web) is in [`docs/engines.md`](docs/engines.md) (Chinese).
+
 | Engine | Deps | Strength | Notes |
 |---|---|---|---|
 | Uniform-prior MCTS | numpy | Low | default fallback |
