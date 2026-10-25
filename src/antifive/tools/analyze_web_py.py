@@ -118,6 +118,8 @@ def main():
     rows = []
     for t in TIERS:
         d = s[t]
+        if d["n"] == 0:      # 缺测档位(如只跑部分对)不参与表格/图表
+            continue
         n = d["n"] - d["draw"]
         p = d["py"] / n if n else 0.0
         lo, hi = wilson(d["py"], n)
@@ -163,7 +165,8 @@ def main():
     ax.set_ylabel("Python 端胜率 %")
     ns = [r[1]["n"] - r[1]["draw"] for r in rows]
     span = f"每档 {min(ns)} 局" if min(ns) == max(ns) else f"每档 {min(ns)}–{max(ns)} 局"
-    ax.set_title(f"{args.budget:g}s 同墙钟:五档 网页端 vs Python 端"
+    tier_txt = "五档" if len(rows) == 5 else f"{len(rows)} 档"
+    ax.set_title(f"{args.budget:g}s 同墙钟:{tier_txt} 网页端 vs Python 端"
                  f"({span},合计 {tot_n} 局,Python {tp:.0%})", fontsize=11)
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
@@ -172,7 +175,7 @@ def main():
 
     # --- report ---
     L = []
-    L.append(f"# {args.budget:g}s 同墙钟:五档 网页端 vs Python 端\n")
+    L.append(f"# {args.budget:g}s 同墙钟:{tier_txt} 网页端 vs Python 端\n")
     if tlo > 0.5:
         verdict = f"**Python 端更强约 {elo(tp):.0f} Elo**"
     elif thi < 0.5:
