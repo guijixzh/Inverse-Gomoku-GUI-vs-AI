@@ -38,6 +38,9 @@ the player who first makes five in a row *loses*). It ships:
 - [Quick Start](#quick-start)
 - [Shortcuts](#shortcuts)
 - [Engines and Weights](#engines-and-weights)
+  - [Five tiers, desktop vs web](#five-tiers-desktop-vs-web)
+  - [Elo per side (lowest tier = 0)](#elo-per-side-lowest-tier--0)
+  - [Same 15 s wall clock](#same-15-s-wall-clock-desktop-vs-web)
 - [Record Format](#record-format)
 - [Training (negative result)](#training-negative-result)
 - [Repository Layout](#repository-layout)
@@ -88,8 +91,8 @@ Play in the browser, no installation:
   any search depth), not difficulty entries, so there is no duplicated/
   overriding control. 15s/move calibration (anchor Beginner = 0 = 10 kyu):
   Advanced +182 (strongest tier), Master +121, Legend +74, Mid +61 — on the web,
-  Advanced is strongest, unlike the desktop order Legend > Master > Advanced (see
-  "Web and desktop are not the same engine" below). Master was displayed as
+  Advanced is strongest, unlike the desktop order Legend > Master > Advanced (why:
+  [`docs/web-engine.md`](docs/web-engine.md)). Master was displayed as
   "Hell" before 2026-10 (internal key stays `hell`).
 - Settings can also adjust the **white-restriction turn count** (balance rule:
   White may not capture during its first N turns, default 2; 0 removes the
@@ -158,28 +161,11 @@ This project is an AI battle and GUI implementation of the game.
 
 ## Project Status (read first)
 
-- **v2.5 (2026-10) summary**: performance and cross-implementation parity.
-  (1) Single-process speedups: Cython hot paths (1.5–1.8×) and root-node
-  parallelism (2.9–5.3× with 4 workers), 15 s median nodes/move 16.4 k → 36.9 k,
-  equal-time score vs the web 26.8% → 65.0%. (2) Desktop vs web, same tier and
-  same 15 s wall clock, 200 games: 65.0% overall (lower tiers draw, upper tiers
-  72–82%). (3) Web five-tier Elo calibration at 15 s (Advanced +182 strongest,
-  Master +121, Legend +74, Mid +61, Beginner 0 anchor) plus a 2 s comparison
-  (92 Elo span). (4) Web engine fixes: `uniformDepth` (same semantics as Python),
-  the Master/Legend defense machinery ported, `hell` now uses distillation v1.
-  (5) New cross-engine harness (`match_web_py` + `engine-bridge.mjs`) and a
-  two-implementation quick-reference table in `docs/engines.md`.
-- **v2.0 (2026-10) summary**: new fifth engine tier **Legend** = Master +
-  KataGo distillation v2 (MLP value correction **replaces** the v1 value term;
-  trained on 460 games / 7664 positions; offline value-sign 85.1%, policy
-  top-1 45.2%) — 12s × 96 equal-time match: Legend **75 : 21** (78.1%) over
-  Master. "Hell" was renamed **Master** (internal key/env vars unchanged);
-  the four-tier UI became five tiers. New distillation-v2 pipeline
-  (`build_distill2_data` record replay + two-tier hard-sample labeling,
-  `train_distill2` D4×8 augmentation) with in-package weights; tuned
-  parameters now ship inside the package (fixes the web silently falling back
-  to built-in constants); also merged: configurable white-push restriction
-  turns (0 = none) and replay auto-play.
+- **v2.5 (2026-10)**: current release. Single-process speedups (Cython hot paths
+  + root-node parallelism, 15 s median nodes/move 16.4 k → 36.9 k); the first
+  same-wall-clock desktop-vs-web match at matched tiers (200 games); web engine
+  fixes (`uniformDepth`, the Master/Legend defense machinery, distillation v1 on
+  `hell`). Full history in [CHANGELOG.md](CHANGELOG.md).
 - **Practical engines are the heuristic AI and KataGo.** The self-trained
   policy/value network (`network.py` + `training/`) **failed overall**: due to
   limited self-play data and compute budget, its strength stays at best slightly
@@ -306,86 +292,56 @@ on desktop vs web) is in [`docs/engines.md`](docs/engines.md) (Chinese).
 | Heuristic AI | numpy | Medium-high | depth 1–8 (Master/Legend deepen within the clock), default 8 + 12s AI clock; five versions: Beginner / Mid / Advanced / Master / Legend |
 | KataGo (inverse gomoku) | external exe + `.bin` | High | recommended |
 
-The heuristic AI needs no extra files (numpy) and comes in five tiers.
+### Five tiers, desktop vs web
 
-| Version | Key traits |
-|---|---|
-| Beginner | classic alpha-beta + global evaluation (no VCF / book / distillation) |
-| Mid | search-consistency fixes + proof-based VCF kill-chain + KataGo opening book + root defensive VCF |
-| Advanced (default) | Mid + KataGo-distilled value correction (tiny linear model predicts winrate, blended at 0.5) |
-| Master | Advanced + deeper VCF (d12 / 240k nodes / ≤1.8 s) + strict-clock budget accounting with adaptive defensive reserve + clock-driven deepening; prophylactic candidates (P1) and latent-threat evaluation (P2) are kept behind switches and off by default (they lost equal-time A/B). Displayed as "Hell" before 2026-10 |
-| Legend | Master + KataGo distillation v2 (when active, the MLP value term **replaces** the v1 term: on by default, weight 0.5; 5-cell pattern prior optional via `ANTIFIVE_PRIOR2_W`; `ANTIFIVE_DISTILL2=0` falls back to Master). 12s × 96 equal-time match: Legend 75 : 21 Master (78.1%) |
+| Tier | Desktop | Desktop mechanisms | Web |
+| --- | --- | --- | --- |
+| Beginner | `heuristic_v2.py` | classic alpha-beta + global evaluation; no VCF / book / distillation | the shared search, no VCF / book / distillation |
+| Mid | `heuristic_v5.py` | Beginner + proof-based VCF kill-chain + KataGo opening book + root defensive VCF | Beginner + VCF (depth 8 / 60 k nodes) + book |
+| Advanced (default) | `heuristic_v6.py` | Mid + distilled value correction v1 (weight 0.5) | Mid + distillation v1 |
+| Master | `heuristic.py` | Advanced + deeper VCF (d12 / 240 k nodes / ≤1.8 s) + adaptive defensive reserve + proven-loss demotion + prophylactic blocking + clock-driven deepening | Advanced + VCF (depth 12 / 240 k) + the same defense trio |
+| Legend | `heuristic_v7.py` | Master + distillation v2 (when active it **replaces** the v1 value term) | Master + distillation v2 |
 
-Historical 1 s/move equal-time Elo (96 games each; Beginner = 1000 anchor):
-Mid ≈ 1340, Advanced ≈ 1650 (Advanced beat Beginner 98%, Advanced beat Mid 82%,
-Mid beat Beginner 88%). At that budget the lower tiers were time-starved; at the
-actual GUI/web budget (12–15 s) the tiers converge. Strict-clock 12 s × 96-game
-results (seed 0; measured when Master was labelled "Hell"; Master no longer
-overruns its own clock): Master beats Advanced 63:33 (65.6%, Elo +112), Mid
-67:29 (69.8%, +145), Beginner 76:20 (79.2%, +232) — Master is the strongest
-tier by every direct pairing. Relative Elo anchored at Beginner = 1000 via
-direct matches: Mid ≈ 1154, Advanced ≈ 1022, Master ≈ 1232 (per-pairing
-CI ≈ ±70 Elo; the frozen tiers show style inconsistencies at 12 s). Full table
-and commands: `docs/engines.md`. Legend vs Master (12 s × 96): 75:21 (78.1%)
-after switching distillation v2 to replace the v1 value term.
+Desktop tiers are five separate implementations; the web shares one ~1.1 k-line TS
+search and differs only in distillation tier, VCF depth/node cap and the defense
+switch. **Same-named tiers are therefore not equivalent**, and the ordering differs
+(desktop: Legend > Master > Advanced; web: Advanced strongest).
 
-### 15s equal-time re-measurement (2026-10)
+### Elo per side (lowest tier = 0)
 
-**Desktop vs web, same tier vs same tier** (`antifive.tools.match_web_py` +
-`web/scripts/engine-bridge.mjs`; identical 4-ply random openings fed to both sides,
-colours swapped, 10 concurrent games, 15 s wall clock per move, 200 games total):
+15 s/move. Desktop numbers come from a five-tier round-robin fitted with
+Bradley-Terry; web numbers from a five-tier self-play calibration. Each column is
+anchored at "Beginner = 0", so only compare within a column:
 
-| Tier | Games | Python : web | Python win rate (95% CI) | Elo |
-|---|---:|---:|---|---:|
-| Beginner | 40 | 18 : 22 | 45.0% (30.7–60.2) | −35 |
-| Mid | 40 | 20 : 20 | 50.0% (35.2–64.8) | 0 |
-| Advanced | 40 | 30 : 10 | **75.0%** (59.8–85.8) | +191 |
-| Master | 40 | 33 : 7 | **82.5%** (68.0–91.3) | +269 |
-| Legend | 40 | 29 : 11 | **72.5%** (57.2–83.9) | +168 |
-| Total | 200 | 130 : 70 | **65.0%** (58.2–71.3) | +108 |
+| Tier | Desktop Elo | Web Elo |
+| --- | ---: | ---: |
+| Beginner | 0 (anchor) | 0 (anchor) |
+| Mid | −106 | +61 |
+| Advanced | +125 | +182 |
+| Master | +210 | +121 |
+| Legend | +231 | +74 |
+
+Each tier has 32–48 games (a tier is counted once per opponent). The Mid–Beginner gap
+is inside its 95% confidence interval, i.e. effectively the same strength: at 15 s/step
+Mid spends part of its budget on VCF slices, so its depth matches Beginner's.
+
+### Same 15 s wall clock: desktop vs web
+
+Matched tiers, 40 games each, 10 concurrent, colours swapped
+(`antifive.tools.match_web_py` + `web/scripts/engine-bridge.mjs`):
+
+| Tier | Desktop : web | Desktop win rate | Elo |
+| --- | ---: | ---: | ---: |
+| Beginner | 18 : 22 | 45.0% | −35 |
+| Mid | 20 : 20 | 50.0% | 0 |
+| Advanced | 30 : 10 | **75.0%** | +191 |
+| Master | 33 : 7 | **82.5%** | +269 |
+| Legend | 29 : 11 | **72.5%** | +168 |
+| Total | 130 : 70 | **65.0%** | +108 |
 
 Lower tiers draw; upper tiers are one to two tiers stronger on the desktop side.
-
-**Web tiers, self-calibrated** (`web/scripts/elo-calibrate.mjs`, 15 s/move,
-300 games, uniform depth, variation on; Beginner = 0 anchor, 100 Elo = 1 rank):
-
-| Version | Elo | 95% CI | Go-equivalent rank |
-|---|---:|---|---|
-| Advanced | +182 | +96 ~ +269 | 8.2 kyu |
-| Master | +121 | +33 ~ +208 | 8.8 kyu |
-| Legend | +74 | −13 ~ +162 | 9.3 kyu |
-| Mid | +61 | −13 ~ +134 | 9.4 kyu |
-| Beginner | 0 | anchor | 10.0 kyu |
-
-At 2 s/move the same schedule spans only 92 Elo: shorter clocks flatten the tiers.
-
-### Web and desktop are not the same engine
-
-- Desktop tiers are five separate implementations (Beginner `heuristic_v2`,
-  Mid `heuristic_v5`, Advanced `heuristic_v6`, Master `heuristic.py` — 2100+
-  lines with defensive reserve, pre-gift blocking, proven-loss demotion and
-  clock-driven deepening — and Legend `heuristic_v7` = Master + distill v2);
-- Web tiers share one ~500-line alpha-beta, differing only in distillation tier,
-  VCF depth/node cap, opening book and (Master/Legend) the ported defense
-  machinery; the web search is 15–20× faster per node and reaches 200–400 k
-  nodes per 15 s (desktop: 20–60 k), so deep search dilutes evaluation differences
-  and the tiers bunch together;
-- Hence **same-named tiers are not equivalent**: at 15 s the desktop "Advanced"
-  already scores 75% against the web "Advanced".
-
-### Single-process performance (2026-10)
-
-- **Cython hot paths**: `python setup_fast.py build_ext --inplace` compiles
-  `_shift` / `_line_maps_combo` / `_board_features` / `legal_mask_for` /
-  `_line5_map_for` / `fwd_run_lengths` into an extension, **1.5–1.8×** single-process;
-  falls back to pure Python automatically when the extension is missing, with
-  bit-identical results (400 random states + fixed-depth move regression);
-- **Root-node parallelism**: `ANTIFIVE_ROOT_WORKERS=4` (Advanced/Master/Legend),
-  **2.9–5.3×** nodes per 15 s; default 1 keeps single-move behaviour unchanged;
-- Combined, the 15 s median nodes/move went 16.4 k → 36.9 k and the equal-time
-  score against the web went 26.8% (before) → 65.0% (after);
-- `*.pyd` / `*.so` / `_fast.c` are build artifacts and not committed; the pure
-  Python path still works without building.
+Per-tier confidence intervals, methodology and reproduction commands are in
+[`docs/engines.md`](docs/engines.md).
 
 Defaults and common switches:
 
